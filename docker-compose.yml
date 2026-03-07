@@ -2,9 +2,9 @@ version: '3.8'
 
 services:
   surrealdb:
-    image: surrealdb/surrealdb:v1.5.0
+    image: surrealdb/surrealdb:v2.2.1
     container_name: researchgraph-db
-    command: start --auth --user root --pass root memory
+    command: start --user root --pass root memory
     ports:
       - "18000:8000"
     volumes:

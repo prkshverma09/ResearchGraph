@@ -88,7 +88,7 @@ pkill -f "uvicorn app.main:app" 2>/dev/null || true
 lsof -ti:18001 | xargs kill -9 2>/dev/null || true
 sleep 2
 
-nohup uvicorn app.main:app --host 0.0.0.0 --port 18001 > /tmp/backend.log 2>&1 &
+nohup uvicorn app.main:app --host 0.0.0.0 --port 18001 --env-file .env > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
 echo "Backend PID: $BACKEND_PID"
 
@@ -125,7 +125,7 @@ pkill -f "next dev" 2>/dev/null || true
 lsof -ti:13000 | xargs kill -9 2>/dev/null || true
 sleep 2
 
-nohup npm run dev -- -p 13000 > /tmp/frontend.log 2>&1 &
+NEXT_PUBLIC_API_URL=http://localhost:18001 nohup npm run dev -- -p 13000 > /tmp/frontend.log 2>&1 &
 FRONTEND_PID=$!
 echo "Frontend PID: $FRONTEND_PID"
 

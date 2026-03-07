@@ -26,6 +26,8 @@ class IngestionResponse(BaseModel):
     status: str
     nodes_created: int = 0
     edges_created: int = 0
+    semantic_counts: Optional[Dict[str, int]] = None
+    full_counts: Optional[Dict[str, int]] = None
     error: Optional[str] = None
 
 
@@ -52,6 +54,14 @@ class AskRequest(BaseModel):
     """Request schema for asking the research agent."""
     question: str = Field(..., description="User's research question")
     session_id: Optional[str] = Field(None, description="Optional session ID for conversation continuity")
+    filter_selected_only: bool = Field(
+        default=False,
+        description="If true, constrain retrieval to selected_paper_ids",
+    )
+    selected_paper_ids: List[str] = Field(
+        default_factory=list,
+        description="Paper IDs to constrain retrieval to when filter_selected_only is true",
+    )
 
 
 class AskResponse(BaseModel):
@@ -75,11 +85,17 @@ class CitationPathResponse(BaseModel):
 
 
 class PaperWithRelations(BaseModel):
-    """Paper with its relations."""
+    """Paper-centric graph payload."""
     paper: Dict[str, Any]
+    mode: str = "semantic"
+    nodes: List[Dict[str, Any]] = Field(default_factory=list)
+    edges: List[Dict[str, Any]] = Field(default_factory=list)
+    counts: Dict[str, int] = Field(default_factory=dict)
     authors: List[Dict[str, Any]] = Field(default_factory=list)
     topics: List[Dict[str, Any]] = Field(default_factory=list)
     citations: List[Dict[str, Any]] = Field(default_factory=list)
+    institutions: List[Dict[str, Any]] = Field(default_factory=list)
+    chunks: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class GraphStatsResponse(BaseModel):

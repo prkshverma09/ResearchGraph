@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import re
 from typing import List, Optional
 from app.models.domain import ExtractedEntities
 from app.db.connection import SurrealDBManager
@@ -94,7 +95,7 @@ class GraphBuilder:
         # Join fields
         set_clause = ", ".join(fields)
         
-        return f"CREATE {paper_id} SET {set_clause}"
+        return f"UPSERT {paper_id} SET {set_clause}"
     
     def build_author_nodes(self, entities: ExtractedEntities) -> List[str]:
         """Build SurrealQL CREATE statements for author nodes.
@@ -116,7 +117,7 @@ class GraphBuilder:
                 fields.append(f"institution = {self._escape_string(author.institution)}")
             
             set_clause = ", ".join(fields)
-            statements.append(f"CREATE {author_id} SET {set_clause}")
+            statements.append(f"UPSERT {author_id} SET {set_clause}")
         
         return statements
     
@@ -134,7 +135,7 @@ class GraphBuilder:
         for topic in entities.topics:
             topic_id = self._generate_topic_id(topic)
             set_clause = f"name = {self._escape_string(topic)}"
-            statements.append(f"CREATE {topic_id} SET {set_clause}")
+            statements.append(f"UPSERT {topic_id} SET {set_clause}")
         
         return statements
     
@@ -152,7 +153,7 @@ class GraphBuilder:
         for institution in entities.institutions:
             institution_id = self._generate_institution_id(institution)
             set_clause = f"name = {self._escape_string(institution)}"
-            statements.append(f"CREATE {institution_id} SET {set_clause}")
+            statements.append(f"UPSERT {institution_id} SET {set_clause}")
         
         return statements
     
@@ -200,6 +201,23 @@ class GraphBuilder:
                 f"RELATE {paper_id}->cites->{cited_id}"
             )
         
+        return statements
+
+    def build_citation_stub_nodes(
+        self,
+        cited_titles: List[str]
+    ) -> List[str]:
+        """Build UPSERT statements for citation stub paper nodes.
+
+        This ensures cited paper targets exist and can be rendered in graph traversal.
+        """
+        statements = []
+        for title in cited_titles:
+            if not title or not title.strip():
+                continue
+            cited_id = self._generate_paper_id(title)
+            set_clause = f"title = {self._escape_string(title.strip())}"
+            statements.append(f"UPSERT {cited_id} SET {set_clause}")
         return statements
     
     def build_belongs_to_edges(
@@ -302,6 +320,7 @@ async def persist_graph(
         builder._generate_paper_id(citation)
         for citation in entities.citations
     ]
+    citation_stub_stmts = builder.build_citation_stub_nodes(entities.citations)
     
     # Generate edges
     authored_by_stmts = builder.build_authored_by_edges(paper_id, author_ids)
@@ -324,6 +343,7 @@ async def persist_graph(
         *author_stmts,
         *topic_stmts,
         *institution_stmts,
+        *citation_stub_stmts,
         *authored_by_stmts,
         *cites_stmts,
         *belongs_to_stmts,
@@ -331,11 +351,17 @@ async def persist_graph(
     ]
     
     # Execute all statements
-    # SurrealDB handles deduplication automatically via deterministic IDs
-    # If a node already exists, CREATE will update it (or we can use CREATE ... ON DUPLICATE KEY UPDATE)
-    # For now, we'll use CREATE which will create or update
+    # Node writes use UPSERT with deterministic IDs so repeated ingests enrich records.
     for statement in all_statements:
         try:
+            relate_match = re.match(r"^\s*RELATE\s+(\S+)->([a-zA-Z_][a-zA-Z0-9_]*)->(\S+)\s*$", statement)
+            if relate_match:
+                source_id, relation_table, target_id = relate_match.groups()
+                existing = await db_manager.execute(
+                    f"SELECT * FROM {relation_table} WHERE in = {source_id} AND out = {target_id} LIMIT 1"
+                )
+                if existing:
+                    continue
             await db_manager.execute(statement)
         except Exception as e:
             # Log error but continue - some nodes might already exist

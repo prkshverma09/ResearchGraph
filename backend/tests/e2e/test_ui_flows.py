@@ -122,3 +122,65 @@ class TestGraphVisualization:
         assert show_graph_btn.is_visible()
         show_graph_btn.click()
         page.get_by_role("button", name="Hide Graph").wait_for()
+
+
+@pytest.mark.e2e
+class TestDeletionAndClearUI:
+    """Deletion and Clear Database UI tests."""
+
+    def test_delete_paper_flow(self, page):
+        """Should be able to delete an ingested paper."""
+        # First ingest a paper via arXiv to ensure we have one
+        page.goto(FRONTEND_URL)
+        page.wait_for_load_state("networkidle")
+        page.get_by_role("button", name="Ingest").click()
+        arxiv_input = page.get_by_placeholder("e.g., 2401.00001")
+        arxiv_input.fill("1706.03762")
+        arxiv_input.press("Enter")
+        page.get_by_text("Paper ingested successfully").wait_for(timeout=120000)
+
+        # Now go to Papers tab
+        page.get_by_role("button", name="Papers").click()
+        page.wait_for_load_state("networkidle")
+
+        # Setup dialog handler to accept confirm
+        page.on("dialog", lambda dialog: dialog.accept())
+
+        # Find the paper in the list
+        paper_card = page.locator("div[role='option']").first
+        paper_card.wait_for(state="visible")
+        
+        title_element = paper_card.locator("h3")
+        title_text = title_element.inner_text()
+        
+        # Hover to make delete button visible
+        paper_card.hover()
+        
+        # Click the delete button
+        delete_btn = paper_card.get_by_title("Delete paper")
+        delete_btn.click()
+        
+        # Wait for the item to be removed
+        page.locator(f"text={title_text}").wait_for(state="hidden", timeout=10000)
+
+    def test_clear_database_flow(self, page):
+        """Should be able to clear the entire database."""
+        page.goto(FRONTEND_URL)
+        page.wait_for_load_state("networkidle")
+        
+        # Accept the confirm dialog
+        page.on("dialog", lambda dialog: dialog.accept())
+
+        page.get_by_role("button", name="Ingest").click()
+        
+        # Click Clear Database
+        clear_btn = page.get_by_role("button", name="Clear Database")
+        clear_btn.click()
+        
+        # Wait for page reload
+        page.wait_for_load_state("networkidle")
+        
+        # Go to papers and verify it's empty
+        page.get_by_role("button", name="Papers").click()
+        page.wait_for_load_state("networkidle")
+        assert page.get_by_text("No papers found").is_visible()

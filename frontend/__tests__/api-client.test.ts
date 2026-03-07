@@ -32,7 +32,7 @@ describe('API Client', () => {
         json: async () => ({ papers: mockPapers }),
       };
 
-      global.fetch = vi.fn().mockResolvedValue(mockResponse as Response);
+      global.fetch = vi.fn().mockResolvedValue(mockResponse as any as Response);
 
       const result = await api.search('test query', 5);
 
@@ -57,7 +57,7 @@ describe('API Client', () => {
         json: async () => ({ message: 'Server error' }),
       };
 
-      global.fetch = vi.fn().mockResolvedValue(mockResponse as Response);
+      global.fetch = vi.fn().mockResolvedValue(mockResponse as any as Response);
 
       await expect(api.search('test query')).rejects.toThrow(ApiError);
     });
@@ -95,7 +95,7 @@ describe('API Client', () => {
         body: mockBody,
       };
 
-      global.fetch = vi.fn().mockResolvedValue(mockResponse as Response);
+      global.fetch = vi.fn().mockResolvedValue(mockResponse as any as Response);
 
       const chunks: string[] = [];
       for await (const chunk of api.askStream('test question')) {
@@ -140,7 +140,7 @@ describe('API Client', () => {
         body: mockBody,
       };
 
-      global.fetch = vi.fn().mockResolvedValue(mockResponse as Response);
+      global.fetch = vi.fn().mockResolvedValue(mockResponse as any as Response);
 
       const chunks: any[] = [];
       for await (const chunk of api.askStream('test question')) {
@@ -160,7 +160,7 @@ describe('API Client', () => {
         status: 500,
       };
 
-      global.fetch = vi.fn().mockResolvedValue(mockResponse as Response);
+      global.fetch = vi.fn().mockResolvedValue(mockResponse as any as Response);
 
       await expect(async () => {
         for await (const _ of api.askStream('test question')) {

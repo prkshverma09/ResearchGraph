@@ -73,4 +73,6 @@ class PaperIngestionResult(BaseModel):
     status: str  # "success" or "error"
     nodes_created: int = 0
     edges_created: int = 0
+    semantic_counts: Optional[dict] = None
+    full_counts: Optional[dict] = None
     error: Optional[str] = None

@@ -51,17 +51,25 @@ class TopicExplorerInput(BaseModel):
     topic: str = Field(description="Topic to explore")
 
 
-def create_vector_search_tool(vector_store_service: VectorStoreService) -> StructuredTool:
+def create_vector_search_tool(
+    vector_store_service: VectorStoreService,
+    allowed_paper_ids: Optional[List[str]] = None,
+) -> StructuredTool:
     """Create VectorSearchTool as a LangChain StructuredTool."""
+    normalized_allowed_ids = sorted(set(allowed_paper_ids)) if allowed_paper_ids else None
     
     async def _arun(query: str, top_k: int = 5) -> Dict[str, Any]:
         """Execute vector search."""
         try:
-            results = await vector_store_service.similarity_search_with_scores(query, k=top_k)
+            results = await vector_store_service.similarity_search_with_scores(
+                query,
+                k=top_k,
+                paper_ids=normalized_allowed_ids,
+            )
             
             papers = []
             paper_ids = []
-            for doc, score in results:
+            for doc, score in results[:top_k]:
                 paper_id = doc.metadata.get("paper_id", "unknown")
                 paper_info = {
                     "title": doc.metadata.get("title", "Unknown"),
@@ -101,13 +109,18 @@ def create_vector_search_tool(vector_store_service: VectorStoreService) -> Struc
 class VectorSearchTool:
     """Tool for performing semantic similarity search on paper chunks."""
     
-    def __init__(self, vector_store_service: VectorStoreService):
+    def __init__(
+        self,
+        vector_store_service: VectorStoreService,
+        allowed_paper_ids: Optional[List[str]] = None,
+    ):
         """Initialize vector search tool.
         
         Args:
             vector_store_service: VectorStoreService instance
         """
         self.vector_store_service = vector_store_service
+        self.allowed_paper_ids = sorted(set(allowed_paper_ids)) if allowed_paper_ids else None
         self.name = "vector_search"
         self.description = "Search for papers using semantic similarity. Use this when the user asks to find papers about a topic, concept, or research area."
         self.args_schema = VectorSearchInput
@@ -123,11 +136,15 @@ class VectorSearchTool:
             Dictionary with 'papers' list containing title, abstract, and relevance_score
         """
         try:
-            results = await self.vector_store_service.similarity_search_with_scores(query, k=top_k)
+            results = await self.vector_store_service.similarity_search_with_scores(
+                query,
+                k=top_k,
+                paper_ids=self.allowed_paper_ids,
+            )
             
             papers = []
             paper_ids = []
-            for doc, score in results:
+            for doc, score in results[:top_k]:
                 paper_id = doc.metadata.get("paper_id", "unknown")
                 paper_info = {
                     "title": doc.metadata.get("title", "Unknown"),
@@ -164,16 +181,42 @@ class VectorSearchTool:
 class GraphQueryTool:
     """Tool for executing graph traversal queries on the research graph."""
     
-    def __init__(self, db_manager: SurrealDBManager):
+    def __init__(
+        self,
+        db_manager: SurrealDBManager,
+        allowed_paper_ids: Optional[List[str]] = None,
+    ):
         """Initialize graph query tool.
         
         Args:
             db_manager: SurrealDBManager instance
         """
         self.db_manager = db_manager
+        self.allowed_paper_ids = set(allowed_paper_ids) if allowed_paper_ids else None
         self.name = "graph_query"
         self.description = "Query the research graph to find papers by author, citations, topics, or coauthors. Use this when the user asks about relationships between papers, authors, or topics."
         self.args_schema = GraphQueryInput
+
+    def _record_id_to_str(self, value: Any) -> str:
+        """Normalize SurrealDB record IDs to string format."""
+        if isinstance(value, dict) and "tb" in value and "id" in value:
+            return f"{value['tb']}:{value['id']}"
+        return str(value)
+
+    def _is_allowed_paper(self, paper: Dict[str, Any]) -> bool:
+        """Check whether a paper dict belongs to allowed paper IDs."""
+        if self.allowed_paper_ids is None:
+            return True
+        paper_id = paper.get("id")
+        if not paper_id:
+            return False
+        return self._record_id_to_str(paper_id) in self.allowed_paper_ids
+
+    def _filter_papers(self, papers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Filter paper result list by allowed paper IDs."""
+        if self.allowed_paper_ids is None:
+            return papers
+        return [paper for paper in papers if isinstance(paper, dict) and self._is_allowed_paper(paper)]
     
     async def _arun(
         self,
@@ -211,9 +254,10 @@ class GraphQueryTool:
                     ORDER BY year DESC
                 """
                 results = await self.db_manager.execute(query, {"author_name": author_name})
+                results = self._filter_papers(results)
                 for paper in results:
                     if isinstance(paper, dict) and "id" in paper:
-                        paper_ids.append(paper["id"])
+                        paper_ids.append(self._record_id_to_str(paper["id"]))
                 
                 if ls:
                     metadata = {
@@ -243,9 +287,10 @@ class GraphQueryTool:
                     )
                 """
                 results = await self.db_manager.execute(query, {"paper_title": paper_title})
+                results = self._filter_papers(results)
                 for citation in results:
                     if isinstance(citation, dict) and "id" in citation:
-                        paper_ids.append(citation["id"])
+                        paper_ids.append(self._record_id_to_str(citation["id"]))
                 
                 if ls:
                     metadata = {
@@ -276,9 +321,10 @@ class GraphQueryTool:
                     ORDER BY year DESC
                 """
                 results = await self.db_manager.execute(query, {"topic": topic})
+                results = self._filter_papers(results)
                 for paper in results:
                     if isinstance(paper, dict) and "id" in paper:
-                        paper_ids.append(paper["id"])
+                        paper_ids.append(self._record_id_to_str(paper["id"]))
                 
                 if ls:
                     metadata = {
@@ -298,21 +344,43 @@ class GraphQueryTool:
                 if not author_name:
                     return {"error": "author_name is required for coauthors query"}
                 
-                query = """
-                    SELECT DISTINCT author.*
-                    FROM author
-                    WHERE id IN (
-                        SELECT ->wrote->author.id
-                        FROM paper
+                if self.allowed_paper_ids is None:
+                    query = """
+                        SELECT DISTINCT author.*
+                        FROM author
                         WHERE id IN (
-                            SELECT ->wrote->paper.id
-                            FROM author
-                            WHERE name = $author_name
+                            SELECT ->wrote->author.id
+                            FROM paper
+                            WHERE id IN (
+                                SELECT ->wrote->paper.id
+                                FROM author
+                                WHERE name = $author_name
+                            )
                         )
-                    )
-                    AND name != $author_name
-                """
-                results = await self.db_manager.execute(query, {"author_name": author_name})
+                        AND name != $author_name
+                    """
+                    params = {"author_name": author_name}
+                else:
+                    query = """
+                        SELECT DISTINCT author.*
+                        FROM author
+                        WHERE id IN (
+                            SELECT ->wrote->author.id
+                            FROM paper
+                            WHERE id IN (
+                                SELECT ->wrote->paper.id
+                                FROM author
+                                WHERE name = $author_name
+                            )
+                            AND id IN $paper_ids
+                        )
+                        AND name != $author_name
+                    """
+                    params = {
+                        "author_name": author_name,
+                        "paper_ids": list(self.allowed_paper_ids),
+                    }
+                results = await self.db_manager.execute(query, params)
                 
                 if ls:
                     metadata = {
@@ -343,16 +411,33 @@ class GraphQueryTool:
 class CitationPathTool:
     """Tool for finding shortest citation paths between papers."""
     
-    def __init__(self, db_manager: SurrealDBManager):
+    def __init__(
+        self,
+        db_manager: SurrealDBManager,
+        allowed_paper_ids: Optional[List[str]] = None,
+    ):
         """Initialize citation path tool.
         
         Args:
             db_manager: SurrealDBManager instance
         """
         self.db_manager = db_manager
+        self.allowed_paper_ids = set(allowed_paper_ids) if allowed_paper_ids else None
         self.name = "citation_path"
         self.description = "Find the shortest citation path between two papers. Use this when the user asks how two papers are connected or related through citations."
         self.args_schema = CitationPathInput
+
+    def _record_id_to_str(self, value: Any) -> str:
+        """Normalize SurrealDB record IDs to string format."""
+        if isinstance(value, dict) and "tb" in value and "id" in value:
+            return f"{value['tb']}:{value['id']}"
+        return str(value)
+
+    def _is_allowed_paper_id(self, value: Any) -> bool:
+        """Check if a record id is in the allowed paper set."""
+        if self.allowed_paper_ids is None:
+            return True
+        return self._record_id_to_str(value) in self.allowed_paper_ids
     
     async def _arun(self, paper_a_title: str, paper_b_title: str) -> Dict[str, Any]:
         """Find citation path between two papers.
@@ -376,6 +461,10 @@ class CitationPathTool:
             
             paper_a_id = paper_a_results[0]["id"]
             paper_b_id = paper_b_results[0]["id"]
+
+            if not self._is_allowed_paper_id(paper_a_id) or not self._is_allowed_paper_id(paper_b_id):
+                return {"path": [], "message": "No citation path found within selected papers"}
+
             paper_ids = [paper_a_id, paper_b_id]
             
             direct_query = f"""
@@ -409,6 +498,8 @@ class CitationPathTool:
             if two_hop_results:
                 intermediate_paper = two_hop_results[0] if isinstance(two_hop_results[0], dict) else None
                 if intermediate_paper:
+                    if not self._is_allowed_paper_id(intermediate_paper.get("id")):
+                        return {"path": [], "message": "No citation path found within selected papers"}
                     if isinstance(intermediate_paper, dict) and "id" in intermediate_paper:
                         paper_ids.append(intermediate_paper["id"])
                     if ls:

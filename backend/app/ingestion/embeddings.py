@@ -147,7 +147,7 @@ class VectorStoreService:
             
             await self.db_manager.execute(
                 f"""
-                CREATE {chunk_id} SET
+                UPSERT {chunk_id} SET
                     content = $content,
                     index = $index,
                     embedding = $embedding,
@@ -162,6 +162,11 @@ class VectorStoreService:
             )
             
             try:
+                existing_edge = await self.db_manager.execute(
+                    f"SELECT * FROM has_chunk WHERE in = {paper_id} AND out = {chunk_id} LIMIT 1"
+                )
+                if existing_edge:
+                    continue
                 await self.db_manager.execute(
                     f"RELATE {paper_id} ->has_chunk-> {chunk_id}",
                 )
@@ -174,33 +179,51 @@ class VectorStoreService:
         self,
         query: str,
         k: int = 5,
+        paper_ids: Optional[List[str]] = None,
     ) -> List[Document]:
         """Perform similarity search in the vector store.
         
         Args:
             query: Query text to search for
             k: Number of results to return
+            paper_ids: Optional paper ID filter
             
         Returns:
             List of Document objects matching the query
         """
+        if paper_ids is not None and not paper_ids:
+            return []
+
         vector_store = await self._ensure_vector_store()
         
         query_embedding = await vector_store.embeddings.aembed_query(query)
         
-        results = await self.db_manager.execute(
-            f"""
-            SELECT 
-                content,
-                metadata,
-                vector::similarity::cosine(embedding, $query_embedding) AS score
-            FROM chunk
-            WHERE embedding <|{k}|> $query_embedding
-            """,
-            {
+        if paper_ids is None:
+            query_sql = f"""
+                SELECT
+                    content,
+                    metadata,
+                    vector::similarity::cosine(embedding, $query_embedding) AS score
+                FROM chunk
+                WHERE embedding <|{k}|> $query_embedding
+            """
+            params = {"query_embedding": query_embedding}
+        else:
+            query_sql = f"""
+                SELECT
+                    content,
+                    metadata,
+                    vector::similarity::cosine(embedding, $query_embedding) AS score
+                FROM chunk
+                WHERE embedding <|{k}|> $query_embedding
+                  AND metadata.paper_id IN $paper_ids
+            """
+            params = {
                 "query_embedding": query_embedding,
+                "paper_ids": paper_ids,
             }
-        )
+
+        results = await self.db_manager.execute(query_sql, params)
         
         documents = []
         for result in results:
@@ -216,33 +239,51 @@ class VectorStoreService:
         self,
         query: str,
         k: int = 5,
+        paper_ids: Optional[List[str]] = None,
     ) -> List[Tuple[Document, float]]:
         """Perform similarity search with relevance scores.
         
         Args:
             query: Query text to search for
             k: Number of results to return
+            paper_ids: Optional paper ID filter
             
         Returns:
             List of tuples containing (Document, score) pairs
         """
+        if paper_ids is not None and not paper_ids:
+            return []
+
         vector_store = await self._ensure_vector_store()
         
         query_embedding = await vector_store.embeddings.aembed_query(query)
         
-        results = await self.db_manager.execute(
-            f"""
-            SELECT 
-                content,
-                metadata,
-                vector::similarity::cosine(embedding, $query_embedding) AS score
-            FROM chunk
-            WHERE embedding <|{k}|> $query_embedding
-            """,
-            {
+        if paper_ids is None:
+            query_sql = f"""
+                SELECT
+                    content,
+                    metadata,
+                    vector::similarity::cosine(embedding, $query_embedding) AS score
+                FROM chunk
+                WHERE embedding <|{k}|> $query_embedding
+            """
+            params = {"query_embedding": query_embedding}
+        else:
+            query_sql = f"""
+                SELECT
+                    content,
+                    metadata,
+                    vector::similarity::cosine(embedding, $query_embedding) AS score
+                FROM chunk
+                WHERE embedding <|{k}|> $query_embedding
+                  AND metadata.paper_id IN $paper_ids
+            """
+            params = {
                 "query_embedding": query_embedding,
+                "paper_ids": paper_ids,
             }
-        )
+
+        results = await self.db_manager.execute(query_sql, params)
         
         documents_with_scores = []
         for result in results:

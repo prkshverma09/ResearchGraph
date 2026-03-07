@@ -64,7 +64,11 @@ async def test_vector_search_tool_returns_papers(mock_vector_store):
     assert len(result["papers"]) == 2
     assert result["papers"][0]["title"] == "Transformer Paper"
     assert result["papers"][0]["relevance_score"] == 0.95
-    mock_vector_store.similarity_search_with_scores.assert_called_once_with("transformers", k=5)
+    mock_vector_store.similarity_search_with_scores.assert_called_once_with(
+        "transformers",
+        k=5,
+        paper_ids=None,
+    )
 
 
 @pytest.mark.asyncio
@@ -80,7 +84,11 @@ async def test_vector_search_tool_respects_top_k(mock_vector_store):
     result = await tool.ainvoke({"query": "test", "top_k": 3})
     
     assert len(result["papers"]) == 3
-    mock_vector_store.similarity_search_with_scores.assert_called_once_with("test", k=3)
+    mock_vector_store.similarity_search_with_scores.assert_called_once_with(
+        "test",
+        k=3,
+        paper_ids=None,
+    )
 
 
 @pytest.mark.asyncio
@@ -169,10 +177,11 @@ async def test_graph_query_tool_coauthors(mock_db):
 @pytest.mark.asyncio
 async def test_citation_path_tool_finds_path(mock_db):
     """CitationPathTool should find a path between two connected papers."""
-    mock_db.execute = AsyncMock(return_value=[
-        {"id": "paper:a", "title": "Paper A"},
-        {"id": "paper:b", "title": "Paper B"},
-        {"id": "paper:c", "title": "Paper C"},
+    mock_db.execute = AsyncMock(side_effect=[
+        [{"id": "paper:a", "title": "Paper A"}],  # paper_a lookup
+        [{"id": "paper:c", "title": "Paper C"}],  # paper_b lookup
+        [],  # direct path check
+        [{"id": "paper:b", "title": "Paper B"}],  # two-hop result
     ])
     
     tool = CitationPathTool(db_manager=mock_db)
@@ -186,7 +195,7 @@ async def test_citation_path_tool_finds_path(mock_db):
     assert len(result["path"]) == 3
     assert result["path"][0]["title"] == "Paper A"
     assert result["path"][-1]["title"] == "Paper C"
-    mock_db.execute.assert_called_once()
+    assert mock_db.execute.call_count == 4
 
 
 @pytest.mark.asyncio
@@ -204,7 +213,7 @@ async def test_citation_path_tool_no_path(mock_db):
     assert "path" in result
     assert len(result["path"]) == 0
     assert "message" in result
-    mock_db.execute.assert_called_once()
+    assert mock_db.execute.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -215,14 +224,20 @@ async def test_paper_summarizer_tool(mock_db, mock_llm):
         {"content": "Chunk 2 content", "index": 1},
     ])
     
-    tool = PaperSummarizerTool(db_manager=mock_db, llm=mock_llm)
+    mock_chain = Mock()
+    mock_chain.ainvoke = AsyncMock(return_value=AIMessage(content="This is a summary of the paper."))
+    mock_prompt = Mock()
+    mock_prompt.__or__ = Mock(return_value=mock_chain)
+
+    with patch("app.agent.tools.ChatPromptTemplate.from_messages", return_value=mock_prompt):
+        tool = PaperSummarizerTool(db_manager=mock_db, llm=mock_llm)
     
-    result = await tool.ainvoke({"paper_id": "paper:123"})
+        result = await tool.ainvoke({"paper_id": "paper:123"})
     
     assert "summary" in result
     assert result["summary"] == "This is a summary of the paper."
     assert mock_db.execute.call_count >= 1
-    mock_llm.ainvoke.assert_called_once()
+    mock_chain.ainvoke.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -256,6 +271,54 @@ async def test_topic_explorer_tool(mock_db, mock_vector_store):
     assert len(result["authors"]) == 2
     mock_vector_store.similarity_search_with_scores.assert_called_once()
     mock_db.execute.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_vector_search_tool_filters_by_selected_paper_ids(mock_vector_store):
+    """VectorSearchTool should pass selected paper IDs to vector search."""
+    tool = VectorSearchTool(
+        vector_store_service=mock_vector_store,
+        allowed_paper_ids=["paper:1"],
+    )
+
+    await tool.ainvoke({"query": "transformers", "top_k": 5})
+
+    mock_vector_store.similarity_search_with_scores.assert_called_once_with(
+        "transformers",
+        k=5,
+        paper_ids=["paper:1"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_graph_query_tool_filters_results_to_selected_papers(mock_db):
+    """GraphQueryTool should drop papers outside selected paper set."""
+    mock_db.execute = AsyncMock(return_value=[
+        {"id": "paper:1", "title": "Allowed"},
+        {"id": "paper:2", "title": "Filtered"},
+    ])
+
+    tool = GraphQueryTool(db_manager=mock_db, allowed_paper_ids=["paper:1"])
+    result = await tool.ainvoke({"query_type": "author_papers", "author_name": "Alice"})
+
+    assert "papers" in result
+    assert len(result["papers"]) == 1
+    assert result["papers"][0]["id"] == "paper:1"
+
+
+@pytest.mark.asyncio
+async def test_citation_path_tool_enforces_selected_paper_scope(mock_db):
+    """CitationPathTool should reject paths outside selected paper set."""
+    mock_db.execute = AsyncMock(side_effect=[
+        [{"id": "paper:a", "title": "Paper A"}],
+        [{"id": "paper:b", "title": "Paper B"}],
+    ])
+
+    tool = CitationPathTool(db_manager=mock_db, allowed_paper_ids=["paper:a"])
+    result = await tool.ainvoke({"paper_a_title": "Paper A", "paper_b_title": "Paper B"})
+
+    assert result["path"] == []
+    assert result["message"] == "No citation path found within selected papers"
 
 
 def test_all_tools_have_name_and_description():

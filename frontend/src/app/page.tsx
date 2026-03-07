@@ -20,6 +20,7 @@ export default function Home() {
   const [streamingContent, setStreamingContent] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null)
+  const [filterSelectedOnly, setFilterSelectedOnly] = useState(false)
   const [showGraph, setShowGraph] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -43,6 +44,18 @@ export default function Home() {
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return
+    if (filterSelectedOnly && !selectedPaperId) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: 'Select a paper first, or turn off "Selected paper only" to search across all papers.',
+        },
+      ])
+      return
+    }
+
+    const selectedPaperIds = selectedPaperId ? [selectedPaperId] : []
 
     const userMessage = input.trim()
     setInput('')
@@ -65,7 +78,10 @@ export default function Home() {
       let finalSessionId = currentSessionId
 
       try {
-        for await (const event of api.askStream(userMessage, currentSessionId)) {
+        for await (const event of api.askStream(userMessage, currentSessionId, {
+          filterSelectedOnly,
+          selectedPaperIds,
+        })) {
           if (event.type === 'session_id') {
             finalSessionId = event.data
             setSessionId(finalSessionId)
@@ -90,7 +106,10 @@ export default function Home() {
           }
         }
 
-        const response = await api.ask(userMessage, finalSessionId)
+        const response = await api.ask(userMessage, finalSessionId, {
+          filterSelectedOnly,
+          selectedPaperIds,
+        })
         if (response.sources.length > 0) {
           sources = response.sources
         }
@@ -102,7 +121,10 @@ export default function Home() {
         setSessionId(finalSessionId)
       } catch (streamError) {
         console.error('Streaming error, falling back to non-streaming:', streamError)
-        const response = await api.ask(userMessage, currentSessionId)
+        const response = await api.ask(userMessage, currentSessionId, {
+          filterSelectedOnly,
+          selectedPaperIds,
+        })
         fullAnswer = response.answer
         sources = response.sources
         finalSessionId = response.session_id
@@ -162,9 +184,14 @@ export default function Home() {
       <Sidebar
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        selectedPaperId={selectedPaperId}
         onPaperSelect={(paperId) => {
           setSelectedPaperId(paperId)
           setShowGraph(true)
+        }}
+        onPaperDeselect={() => {
+          setSelectedPaperId(null)
+          setShowGraph(false)
         }}
         onIngestionComplete={() => {
         }}
@@ -240,6 +267,23 @@ export default function Home() {
             </div>
 
             <div className="border-t border-gray-200 dark:border-gray-700 p-4 bg-white dark:bg-gray-900">
+              <div className="mb-2 flex items-center justify-between">
+                <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                  <input
+                    type="checkbox"
+                    checked={filterSelectedOnly}
+                    onChange={(e) => setFilterSelectedOnly(e.target.checked)}
+                    disabled={isLoading}
+                    className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  />
+                  Selected paper only
+                </label>
+                {filterSelectedOnly && (
+                  <span className="text-xs text-primary-700 dark:text-primary-300">
+                    {selectedPaperId ? `Using: ${selectedPaperId}` : 'No paper selected'}
+                  </span>
+                )}
+              </div>
               <div className="flex gap-2">
                 <textarea
                   ref={inputRef}
@@ -253,7 +297,7 @@ export default function Home() {
                 />
                 <button
                   onClick={handleSend}
-                  disabled={isLoading || !input.trim()}
+                  disabled={isLoading || !input.trim() || (filterSelectedOnly && !selectedPaperId)}
                   className="px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed self-end"
                 >
                   {isLoading ? 'Sending...' : 'Send'}

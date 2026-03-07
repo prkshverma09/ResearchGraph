@@ -10,14 +10,18 @@ type SidebarTab = 'papers' | 'ingest'
 interface SidebarProps {
   isOpen: boolean
   onClose: () => void
+  selectedPaperId?: string | null
   onPaperSelect?: (paperId: string) => void
+  onPaperDeselect?: () => void
   onIngestionComplete?: () => void
 }
 
 export default function Sidebar({
   isOpen,
   onClose,
+  selectedPaperId,
   onPaperSelect,
+  onPaperDeselect,
   onIngestionComplete,
 }: SidebarProps) {
   const [activeTab, setActiveTab] = useState<SidebarTab>('papers')
@@ -79,7 +83,11 @@ export default function Sidebar({
 
         <div className="flex-1 overflow-hidden">
           {activeTab === 'papers' ? (
-            <PaperList onPaperSelect={onPaperSelect} />
+            <PaperList
+              selectedPaperId={selectedPaperId}
+              onPaperSelect={onPaperSelect}
+              onPaperDeselect={onPaperDeselect}
+            />
           ) : (
             <div className="h-full overflow-y-auto">
               <IngestionPanel onIngestionComplete={onIngestionComplete} />

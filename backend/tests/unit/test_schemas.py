@@ -25,9 +25,19 @@ def test_ask_request_validates():
     request = AskRequest(question="What is machine learning?")
     assert request.question == "What is machine learning?"
     assert request.session_id is None
+    assert request.filter_selected_only is False
+    assert request.selected_paper_ids == []
     
     request_with_session = AskRequest(question="Follow-up question", session_id="session:123")
     assert request_with_session.session_id == "session:123"
+
+    request_with_filter = AskRequest(
+        question="Summarize selected paper",
+        filter_selected_only=True,
+        selected_paper_ids=["paper:123"],
+    )
+    assert request_with_filter.filter_selected_only is True
+    assert request_with_filter.selected_paper_ids == ["paper:123"]
     
     with pytest.raises(ValidationError):
         AskRequest()

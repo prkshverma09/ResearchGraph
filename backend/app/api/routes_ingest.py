@@ -18,6 +18,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ingest", tags=["ingestion"])
 
 
+def _normalize_counts(value):
+    """Normalize count payloads to {nodes:int, edges:int} or None."""
+    if not isinstance(value, dict):
+        return None
+    nodes = value.get("nodes")
+    edges = value.get("edges")
+    if isinstance(nodes, int) and isinstance(edges, int):
+        return {"nodes": nodes, "edges": edges}
+    return None
+
+
 @router.post("/pdf", response_model=IngestionResponse)
 async def ingest_pdf(
     file: UploadFile = File(...),
@@ -53,6 +64,8 @@ async def ingest_pdf(
             status=result.status,
             nodes_created=result.nodes_created,
             edges_created=result.edges_created,
+            semantic_counts=_normalize_counts(getattr(result, "semantic_counts", None)),
+            full_counts=_normalize_counts(getattr(result, "full_counts", None)),
         )
     except HTTPException:
         raise
@@ -90,6 +103,8 @@ async def ingest_arxiv(
             status=result.status,
             nodes_created=result.nodes_created,
             edges_created=result.edges_created,
+            semantic_counts=_normalize_counts(getattr(result, "semantic_counts", None)),
+            full_counts=_normalize_counts(getattr(result, "full_counts", None)),
         )
     except HTTPException:
         raise
@@ -124,6 +139,8 @@ async def ingest_semantic_scholar(
             status=result.status,
             nodes_created=result.nodes_created,
             edges_created=result.edges_created,
+            semantic_counts=_normalize_counts(getattr(result, "semantic_counts", None)),
+            full_counts=_normalize_counts(getattr(result, "full_counts", None)),
         )
     except HTTPException:
         raise

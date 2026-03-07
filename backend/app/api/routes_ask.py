@@ -3,7 +3,7 @@
 import logging
 import json
 import re
-from typing import Optional
+from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from langchain_openai import ChatOpenAI
@@ -62,14 +62,38 @@ def _classify_query_type(question: str) -> str:
         return 'general'
 
 
-def _create_agent_tools(db: SurrealDBManager):
+def _normalize_paper_ids(paper_ids: List[str]) -> List[str]:
+    """Normalize selected paper IDs by trimming empties and de-duplicating."""
+    normalized: List[str] = []
+    seen = set()
+    for paper_id in paper_ids:
+        if not isinstance(paper_id, str):
+            continue
+        value = paper_id.strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
+
+
+def _create_agent_tools(
+    db: SurrealDBManager,
+    selected_paper_ids: Optional[List[str]] = None,
+):
     """Create agent tools with dependencies."""
     from langchain_core.tools import StructuredTool
     
     vector_store = VectorStoreService(db_manager=db)
-    vector_search = create_vector_search_tool(vector_store)
+    vector_search = create_vector_search_tool(
+        vector_store,
+        allowed_paper_ids=selected_paper_ids,
+    )
     
-    graph_query_tool = GraphQueryTool(db_manager=db)
+    graph_query_tool = GraphQueryTool(
+        db_manager=db,
+        allowed_paper_ids=selected_paper_ids,
+    )
     graph_query = StructuredTool.from_function(
         func=graph_query_tool.ainvoke,
         name="graph_query",
@@ -77,7 +101,10 @@ def _create_agent_tools(db: SurrealDBManager):
         args_schema=graph_query_tool.args_schema,
     )
     
-    citation_path_tool = CitationPathTool(db_manager=db)
+    citation_path_tool = CitationPathTool(
+        db_manager=db,
+        allowed_paper_ids=selected_paper_ids,
+    )
     citation_path = StructuredTool.from_function(
         func=citation_path_tool.ainvoke,
         name="citation_path",
@@ -104,6 +131,13 @@ async def ask(
     """
     try:
         session_id = request.session_id
+        selected_paper_ids = _normalize_paper_ids(request.selected_paper_ids)
+
+        if request.filter_selected_only and not selected_paper_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="selected_paper_ids is required when filter_selected_only is true",
+            )
         
         if not session_id:
             session_id = await create_session(user_id="default", db_manager=db)
@@ -115,7 +149,10 @@ async def ask(
         
         query_type = _classify_query_type(request.question)
         
-        tools = _create_agent_tools(db)
+        tools = _create_agent_tools(
+            db,
+            selected_paper_ids=selected_paper_ids if request.filter_selected_only else None,
+        )
         llm = ChatOpenAI(
             model="gpt-4o-mini",
             temperature=0,
@@ -133,6 +170,8 @@ async def ask(
             "graph_results": [],
             "citation_path": [],
             "session_id": session_id,
+            "filter_selected_only": request.filter_selected_only,
+            "selected_paper_ids": selected_paper_ids,
         }
         
         config = get_langgraph_config(session_id)
@@ -143,6 +182,8 @@ async def ask(
                     "session_id": session_id,
                     "query_type": query_type,
                     "query": request.question,
+                    "filter_selected_only": request.filter_selected_only,
+                    "selected_paper_ids": selected_paper_ids,
                 }
             ):
                 final_state = await graph.ainvoke(initial_state, config=config)
@@ -206,6 +247,13 @@ async def ask_stream(
     Returns:
         StreamingResponse with Server-Sent Events
     """
+    selected_paper_ids = _normalize_paper_ids(request.selected_paper_ids)
+    if request.filter_selected_only and not selected_paper_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="selected_paper_ids is required when filter_selected_only is true",
+        )
+
     async def generate():
         try:
             session_id = request.session_id
@@ -220,7 +268,10 @@ async def ask_stream(
             
             query_type = _classify_query_type(request.question)
             
-            tools = _create_agent_tools(db)
+            tools = _create_agent_tools(
+                db,
+                selected_paper_ids=selected_paper_ids if request.filter_selected_only else None,
+            )
             llm = ChatOpenAI(
                 model="gpt-4o-mini",
                 temperature=0,
@@ -238,6 +289,8 @@ async def ask_stream(
                 "graph_results": [],
                 "citation_path": [],
                 "session_id": session_id,
+                "filter_selected_only": request.filter_selected_only,
+                "selected_paper_ids": selected_paper_ids,
             }
             
             config = get_langgraph_config(session_id)
@@ -250,6 +303,8 @@ async def ask_stream(
                         "session_id": session_id,
                         "query_type": query_type,
                         "query": request.question,
+                        "filter_selected_only": request.filter_selected_only,
+                        "selected_paper_ids": selected_paper_ids,
                     }
                 ):
                     async for event in stream_agent_response(graph, initial_state, config=config):

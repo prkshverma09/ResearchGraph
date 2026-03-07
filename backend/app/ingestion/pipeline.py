@@ -82,21 +82,16 @@ class IngestionPipeline:
             logger.info("Storing chunks with embeddings")
             await self.vector_store.add_paper_chunks(paper_id, chunks_with_embeddings)
             
-            # Count nodes and edges (simplified - would need to query DB for accurate counts)
-            nodes_created = 1 + len(entities.authors) + len(entities.topics) + len(entities.institutions)
-            edges_created = (
-                len(entities.authors) +  # authored_by edges
-                len(entities.citations) +  # cites edges
-                len(entities.topics) +  # belongs_to edges
-                len(chunks_with_embeddings)  # has_chunk edges
-            )
+            semantic_counts, full_counts = await self._compute_persisted_counts(paper_id)
             
             logger.info(f"Ingestion complete: {paper_id}")
             return PaperIngestionResult(
                 paper_id=paper_id,
                 status="success",
-                nodes_created=nodes_created,
-                edges_created=edges_created,
+                nodes_created=semantic_counts["nodes"],
+                edges_created=semantic_counts["edges"],
+                semantic_counts=semantic_counts,
+                full_counts=full_counts,
             )
         except Exception as e:
             logger.error(f"Ingestion failed: {e}", exc_info=True)
@@ -128,20 +123,16 @@ class IngestionPipeline:
             paper_id = await persist_graph(self.db_manager, entities)
             await self.vector_store.add_paper_chunks(paper_id, chunks_with_embeddings)
             
-            nodes_created = 1 + len(entities.authors) + len(entities.topics) + len(entities.institutions)
-            edges_created = (
-                len(entities.authors) +
-                len(entities.citations) +
-                len(entities.topics) +
-                len(chunks_with_embeddings)
-            )
+            semantic_counts, full_counts = await self._compute_persisted_counts(paper_id)
             
             logger.info(f"arXiv ingestion complete: {paper_id}")
             return PaperIngestionResult(
                 paper_id=paper_id,
                 status="success",
-                nodes_created=nodes_created,
-                edges_created=edges_created,
+                nodes_created=semantic_counts["nodes"],
+                edges_created=semantic_counts["edges"],
+                semantic_counts=semantic_counts,
+                full_counts=full_counts,
             )
         except Exception as e:
             logger.error(f"arXiv ingestion failed: {e}", exc_info=True)
@@ -173,20 +164,16 @@ class IngestionPipeline:
             paper_id_result = await persist_graph(self.db_manager, entities)
             await self.vector_store.add_paper_chunks(paper_id_result, chunks_with_embeddings)
             
-            nodes_created = 1 + len(entities.authors) + len(entities.topics) + len(entities.institutions)
-            edges_created = (
-                len(entities.authors) +
-                len(entities.citations) +
-                len(entities.topics) +
-                len(chunks_with_embeddings)
-            )
+            semantic_counts, full_counts = await self._compute_persisted_counts(paper_id_result)
             
             logger.info(f"Semantic Scholar ingestion complete: {paper_id_result}")
             return PaperIngestionResult(
                 paper_id=paper_id_result,
                 status="success",
-                nodes_created=nodes_created,
-                edges_created=edges_created,
+                nodes_created=semantic_counts["nodes"],
+                edges_created=semantic_counts["edges"],
+                semantic_counts=semantic_counts,
+                full_counts=full_counts,
             )
         except Exception as e:
             logger.error(f"Semantic Scholar ingestion failed: {e}", exc_info=True)
@@ -239,3 +226,44 @@ class IngestionPipeline:
                 ))
         
         return results
+
+    async def _compute_persisted_counts(self, paper_id: str) -> tuple[Dict[str, int], Dict[str, int]]:
+        """Compute exact persisted node/edge counts for semantic and full graph modes."""
+        authored_edges = await self.db_manager.execute(
+            f"SELECT out FROM authored_by WHERE in = {paper_id}"
+        )
+        topic_edges = await self.db_manager.execute(
+            f"SELECT out FROM belongs_to WHERE in = {paper_id}"
+        )
+        citation_edges = await self.db_manager.execute(
+            f"SELECT out FROM cites WHERE in = {paper_id}"
+        )
+        chunk_edges = await self.db_manager.execute(
+            f"SELECT out FROM has_chunk WHERE in = {paper_id}"
+        )
+
+        author_ids = {str(row.get("out")) for row in authored_edges if row.get("out")}
+        topic_ids = {str(row.get("out")) for row in topic_edges if row.get("out")}
+        citation_ids = {str(row.get("out")) for row in citation_edges if row.get("out")}
+        chunk_ids = {str(row.get("out")) for row in chunk_edges if row.get("out")}
+
+        affiliation_count = 0
+        institution_ids: set[str] = set()
+        for author_id in author_ids:
+            aff_edges = await self.db_manager.execute(
+                f"SELECT out FROM affiliated_with WHERE in = {author_id}"
+            )
+            affiliation_count += len(aff_edges)
+            for row in aff_edges:
+                if row.get("out"):
+                    institution_ids.add(str(row.get("out")))
+
+        semantic_nodes = 1 + len(author_ids) + len(topic_ids) + len(citation_ids) + len(institution_ids)
+        semantic_edges = len(authored_edges) + len(topic_edges) + len(citation_edges) + affiliation_count
+        full_nodes = semantic_nodes + len(chunk_ids)
+        full_edges = semantic_edges + len(chunk_edges)
+
+        return (
+            {"nodes": semantic_nodes, "edges": semantic_edges},
+            {"nodes": full_nodes, "edges": full_edges},
+        )

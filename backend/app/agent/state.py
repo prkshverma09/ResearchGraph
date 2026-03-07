@@ -1,6 +1,6 @@
 """Agent state schema for LangGraph workflow."""
 
-from typing import TypedDict, Annotated, List
+from typing import TypedDict, Annotated, List, NotRequired
 from langchain_core.messages import BaseMessage
 
 
@@ -36,3 +36,5 @@ class ResearchAgentState(TypedDict):
     citation_path: List[dict]
     final_answer: str
     session_id: str
+    filter_selected_only: NotRequired[bool]
+    selected_paper_ids: NotRequired[List[str]]

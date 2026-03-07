@@ -118,6 +118,8 @@ def create_synthesizer_node(llm: ChatOpenAI):
         messages = state["messages"]
         query = state.get("query", "")
         session_id = state.get("session_id", "")
+        filter_selected_only = state.get("filter_selected_only", False)
+        selected_paper_ids = state.get("selected_paper_ids", [])
         
         if not query and messages:
             for msg in reversed(messages):
@@ -171,7 +173,9 @@ def create_synthesizer_node(llm: ChatOpenAI):
         synthesis_prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a research assistant. Synthesize the tool results into a clear, 
             comprehensive answer to the user's query. Include specific paper titles and authors when 
-            available. Cite sources appropriately."""),
+            available. Cite sources appropriately.
+            
+            Selected-paper-only mode: {filter_mode_note}"""),
             ("user", """User query: {query}
 
 Tool results:
@@ -196,13 +200,21 @@ Provide a comprehensive answer based on these results.""")
                 
                 with ls.tracing_context(metadata=metadata):
                     response = await chain.ainvoke({
-                        "query": query,
-                        "tool_results": tool_results_text,
-                    })
+                    "query": query,
+                    "tool_results": tool_results_text,
+                    "filter_mode_note": (
+                        f"ENABLED. Restrict reasoning to selected papers: {selected_paper_ids}"
+                        if filter_selected_only else "DISABLED. Results may span all papers."
+                    ),
+                })
             else:
                 response = await chain.ainvoke({
                     "query": query,
                     "tool_results": tool_results_text,
+                    "filter_mode_note": (
+                        f"ENABLED. Restrict reasoning to selected papers: {selected_paper_ids}"
+                        if filter_selected_only else "DISABLED. Results may span all papers."
+                    ),
                 })
             
             final_answer = response.content if hasattr(response, "content") else str(response)

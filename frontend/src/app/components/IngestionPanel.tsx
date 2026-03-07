@@ -15,6 +15,15 @@ export default function IngestionPanel({ onIngestionComplete }: IngestionPanelPr
   const [status, setStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  const buildIngestSuccessMessage = (result: any) => {
+    const semantic = result.semantic_counts
+    const full = result.full_counts
+    if (semantic && full) {
+      return `Paper ingested successfully! Semantic: ${semantic.nodes} nodes / ${semantic.edges} edges. Full: ${full.nodes} nodes / ${full.edges} edges.`
+    }
+    return `Paper ingested successfully! Created ${result.nodes_created} nodes and ${result.edges_created} edges.`
+  }
+
   const handleDragEnter = (e: DragEvent) => {
     e.preventDefault()
     e.stopPropagation()
@@ -62,7 +71,7 @@ export default function IngestionPanel({ onIngestionComplete }: IngestionPanelPr
       const result = await api.ingestPDF(file)
       setStatus({
         type: 'success',
-        message: `Paper ingested successfully! Created ${result.nodes_created} nodes and ${result.edges_created} edges.`,
+        message: buildIngestSuccessMessage(result),
       })
       onIngestionComplete?.()
     } catch (error) {
@@ -91,7 +100,7 @@ export default function IngestionPanel({ onIngestionComplete }: IngestionPanelPr
       const result = await api.ingestArxiv(arxivId.trim())
       setStatus({
         type: 'success',
-        message: `Paper ingested successfully! Created ${result.nodes_created} nodes and ${result.edges_created} edges.`,
+        message: buildIngestSuccessMessage(result),
       })
       setArxivId('')
       onIngestionComplete?.()
@@ -102,6 +111,20 @@ export default function IngestionPanel({ onIngestionComplete }: IngestionPanelPr
       })
     } finally {
       setIngestingArxiv(false)
+    }
+  }
+
+  const handleClearDatabase = async () => {
+    if (window.confirm('Are you sure you want to completely clear the database? This cannot be undone.')) {
+      try {
+        await api.clearDatabase()
+        window.location.reload()
+      } catch (error) {
+        setStatus({
+          type: 'error',
+          message: error instanceof Error ? error.message : 'Failed to clear database',
+        })
+      }
     }
   }
 
@@ -188,6 +211,21 @@ export default function IngestionPanel({ onIngestionComplete }: IngestionPanelPr
             {status.message}
           </div>
         )}
+      </div>
+
+      <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
+        <h3 className="text-sm font-semibold mb-4 text-red-600 dark:text-red-400">
+          Danger Zone
+        </h3>
+        <button
+          onClick={handleClearDatabase}
+          className="w-full px-4 py-2 border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 rounded-md hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors focus:outline-none focus:ring-2 focus:ring-red-500"
+        >
+          Clear Database
+        </button>
+        <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          This will completely wipe all papers, authors, and relationships from the database. This action cannot be undone.
+        </p>
       </div>
     </div>
   )

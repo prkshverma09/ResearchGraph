@@ -36,9 +36,9 @@ test-e2e-api:
 export DOCKER_HOST ?= unix://$(HOME)/.rd/docker.sock
 
 db-up:
-	@if [ ! -S "$(HOME)/.rd/docker.sock" ]; then \
-		echo "❌ ERROR: Rancher Desktop is not running or socket not found."; \
-		echo "Please start Rancher Desktop and try again."; \
+	@if ! docker ps >/dev/null 2>&1; then \
+		echo "❌ ERROR: Docker/Rancher Desktop is not running."; \
+		echo "Please start Rancher Desktop (or Docker) and try again."; \
 		exit 1; \
 	fi
 	docker compose up -d surrealdb
@@ -46,15 +46,15 @@ db-up:
 	@sleep 3
 
 db-down:
-	@if [ ! -S "$(HOME)/.rd/docker.sock" ]; then \
-		echo "❌ ERROR: Rancher Desktop is not running or socket not found."; \
+	@if ! docker ps >/dev/null 2>&1; then \
+		echo "❌ ERROR: Docker/Rancher Desktop is not running."; \
 		exit 1; \
 	fi
 	docker compose down
 
 db-reset:
-	@if [ ! -S "$(HOME)/.rd/docker.sock" ]; then \
-		echo "❌ ERROR: Rancher Desktop is not running or socket not found."; \
+	@if ! docker ps >/dev/null 2>&1; then \
+		echo "❌ ERROR: Docker/Rancher Desktop is not running."; \
 		exit 1; \
 	fi
 	docker compose down -v

@@ -18,19 +18,29 @@ fi
 echo "=== ResearchGraph Complete E2E Test Runner ==="
 echo ""
 
-# Check Rancher Desktop
-if [ ! -S "$HOME/.rd/docker.sock" ]; then
-    echo "❌ ERROR: Rancher Desktop is not running or socket not found."
-    echo "Please start Rancher Desktop and try again."
-    exit 1
-fi
+# Ensure DOCKER_HOST is set for Rancher Desktop (from .env or default)
+export DOCKER_HOST="${DOCKER_HOST:-unix://${HOME}/.rd/docker.sock}"
 
-if ! docker ps >/dev/null 2>&1; then
-    echo "❌ ERROR: Cannot connect to Rancher Desktop."
-    echo "Please ensure Rancher Desktop is running and try again."
+# Check Docker/Rancher Desktop - prefer docker ps over socket check (more reliable)
+if docker ps >/dev/null 2>&1; then
+    echo "✓ Docker/Rancher Desktop is running"
+elif [ -S "${HOME}/.rd/docker.sock" ]; then
+    echo "❌ ERROR: Socket exists but 'docker ps' failed. Try: docker ps"
+    exit 1
+elif [ -S "/var/run/docker.sock" ]; then
+    export DOCKER_HOST=unix:///var/run/docker.sock
+    if docker ps >/dev/null 2>&1; then
+        echo "✓ Docker is running"
+    else
+        echo "❌ ERROR: Cannot connect to Docker."
+        exit 1
+    fi
+else
+    echo "❌ ERROR: Docker/Rancher Desktop is not running."
+    echo "  - Rancher Desktop: Start the app, ensure socket exists at ~/.rd/docker.sock"
+    echo "  - Docker Desktop: Ensure Docker is running"
     exit 1
 fi
-echo "✓ Rancher Desktop is running"
 
 # Activate venv
 if [ ! -d "backend/.venv" ]; then
@@ -75,17 +85,18 @@ source .venv/bin/activate
 
 # Kill any existing backend process
 pkill -f "uvicorn app.main:app" 2>/dev/null || true
+lsof -ti:18001 | xargs kill -9 2>/dev/null || true
 sleep 2
 
-nohup uvicorn app.main:app --host 0.0.0.0 --port 8001 > /tmp/backend.log 2>&1 &
+nohup uvicorn app.main:app --host 0.0.0.0 --port 18001 > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
 echo "Backend PID: $BACKEND_PID"
 
 # Wait for backend to start
 echo "Waiting for backend to start..."
 for i in {1..30}; do
-    if curl -s http://localhost:8001/api/health >/dev/null 2>&1; then
-        echo "✓ Backend is running on http://localhost:8001"
+    if curl -s -f http://localhost:18001/api/health >/dev/null 2>&1; then
+        echo "✓ Backend is running on http://localhost:18001"
         break
     fi
     if [ $i -eq 30 ]; then
@@ -111,17 +122,18 @@ fi
 
 # Kill any existing frontend process
 pkill -f "next dev" 2>/dev/null || true
+lsof -ti:13000 | xargs kill -9 2>/dev/null || true
 sleep 2
 
-nohup npm run dev > /tmp/frontend.log 2>&1 &
+nohup npm run dev -- -p 13000 > /tmp/frontend.log 2>&1 &
 FRONTEND_PID=$!
 echo "Frontend PID: $FRONTEND_PID"
 
 # Wait for frontend to start
 echo "Waiting for frontend to start..."
 for i in {1..30}; do
-    if curl -s http://localhost:3000 >/dev/null 2>&1; then
-        echo "✓ Frontend is running on http://localhost:3000"
+    if curl -s -f http://localhost:13000 >/dev/null 2>&1; then
+        echo "✓ Frontend is running on http://localhost:13000"
         break
     fi
     if [ $i -eq 30 ]; then
@@ -175,8 +187,8 @@ echo ""
 echo "=== Test Run Complete ==="
 echo ""
 echo "Services are still running:"
-echo "  Backend:  http://localhost:8001 (PID: $BACKEND_PID)"
-echo "  Frontend: http://localhost:3000 (PID: $FRONTEND_PID)"
+echo "  Backend:  http://localhost:18001 (PID: $BACKEND_PID)"
+echo "  Frontend: http://localhost:13000 (PID: $FRONTEND_PID)"
 echo ""
 echo "To stop services:"
 echo "  kill $BACKEND_PID $FRONTEND_PID"

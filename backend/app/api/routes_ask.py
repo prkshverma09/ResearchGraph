@@ -259,6 +259,10 @@ async def ask_stream(
                         yield f"data: {json.dumps({'type': 'node', 'node': node_name, 'data': node_data})}\n\n"
             else:
                 async for event in stream_agent_response(graph, initial_state, config=config):
+                    node_name = list(event.keys())[0] if event else None
+                    node_data = event.get(node_name, {}) if node_name else {}
+                    
+                    yield f"data: {json.dumps({'type': 'node', 'node': node_name, 'data': node_data})}\n\n"
             
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception as e:

@@ -6,7 +6,7 @@ pytest.importorskip("playwright", reason="Run: pip install pytest-playwright && 
 
 from pathlib import Path
 
-FRONTEND_URL = "http://localhost:3000"
+FRONTEND_URL = "http://localhost:13000"
 
 
 @pytest.mark.e2e

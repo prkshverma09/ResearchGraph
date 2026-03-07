@@ -4,8 +4,8 @@ import pytest
 import httpx
 from pathlib import Path
 
-BASE_URL = "http://localhost:8001"
-FRONTEND_URL = "http://localhost:3000"
+BASE_URL = "http://localhost:18001"
+FRONTEND_URL = "http://localhost:13000"
 
 
 @pytest.fixture

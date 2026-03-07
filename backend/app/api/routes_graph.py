@@ -1,18 +1,66 @@
 """API routes for graph queries and statistics."""
 
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Any
+from fastapi import APIRouter, Depends, HTTPException
 from app.dependencies import get_db
 from app.db.connection import SurrealDBManager
 from app.agent.tools import CitationPathTool
 from app.models.schemas import (
     PaperWithRelations,
     GraphStatsResponse,
+    PaperSearchResult,
+    SearchResponse,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/graph", tags=["graph"])
+
+
+def _serialize_record_ids(obj: Any) -> Any:
+    """Recursively convert SurrealDB RecordID objects to strings for JSON serialization."""
+    if isinstance(obj, dict):
+        return {k: _serialize_record_ids(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_serialize_record_ids(v) for v in obj]
+    if type(obj).__name__ == "RecordID":
+        return str(obj)
+    return obj
+
+
+@router.get("/papers", response_model=SearchResponse)
+async def list_papers(
+    db_manager: SurrealDBManager = Depends(get_db),
+):
+    """List all papers from the paper table (direct query, no vector search).
+
+    Use this when the Papers tab loads with no search query.
+
+    Returns:
+        SearchResponse with papers in PaperSearchResult format (relevance_score: 1.0)
+    """
+    try:
+        results = await db_manager.execute("SELECT * FROM paper")
+        papers = []
+        for row in results or []:
+            paper_id = row.get("id")
+            if isinstance(paper_id, dict) and "tb" in paper_id and "id" in paper_id:
+                paper_id = f"{paper_id['tb']}:{paper_id['id']}"
+            else:
+                paper_id = str(paper_id) if paper_id else ""
+            papers.append(
+                PaperSearchResult(
+                    paper_id=paper_id,
+                    title=row.get("title", "Unknown"),
+                    abstract=row.get("abstract", "") or "",
+                    relevance_score=1.0,
+                )
+            )
+        return SearchResponse(papers=papers)
+    except Exception as e:
+        logger.error(f"List papers error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list papers: {str(e)}")
 
 
 @router.get("/paper/{paper_id}", response_model=PaperWithRelations)
@@ -49,7 +97,10 @@ async def get_paper_with_relations(
         authors = result.get('authors', []) or []
         topics = result.get('topics', []) or []
         citations = result.get('citations', []) or []
-        
+        paper = _serialize_record_ids(paper)
+        authors = _serialize_record_ids(authors)
+        topics = _serialize_record_ids(topics)
+        citations = _serialize_record_ids(citations)
         return PaperWithRelations(
             paper=paper,
             authors=authors if authors else [],

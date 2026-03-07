@@ -68,7 +68,7 @@ echo "✓ OpenAI API key found"
 # Start SurrealDB
 echo ""
 echo "Starting SurrealDB..."
-make db-up
+make db-reset
 sleep 5
 
 if ! docker ps | grep -q surrealdb; then

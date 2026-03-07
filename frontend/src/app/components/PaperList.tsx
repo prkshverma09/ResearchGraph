@@ -21,7 +21,7 @@ export default function PaperList({ onPaperSelect }: PaperListProps) {
     try {
       setLoading(true)
       setError(null)
-      const response = await api.search('', 20)
+      const response = await api.listPapers()
       setPapers(response.papers)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load papers')

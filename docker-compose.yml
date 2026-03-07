@@ -4,7 +4,8 @@ services:
   surrealdb:
     image: surrealdb/surrealdb:v2.2.1
     container_name: researchgraph-db
-    command: start --user root --pass root memory
+    user: root
+    command: start --user root --pass root rocksdb:///data/surreal.db
     ports:
       - "18000:8000"
     volumes:

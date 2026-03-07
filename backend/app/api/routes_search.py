@@ -32,7 +32,6 @@ async def search(
             request.query,
             k=request.top_k
         )
-        
         papers = []
         for doc, score in results:
             papers.append(PaperSearchResult(

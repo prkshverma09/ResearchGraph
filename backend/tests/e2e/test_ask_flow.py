@@ -59,3 +59,9 @@ class TestAskFlow:
         data = response.json()
         assert "insufficient context" not in data.get("answer", "").lower()
         assert len(data.get("sources", [])) >= 1
+        source_titles = [str(source.get("title", "")).strip() for source in data["sources"]]
+        assert all(title.lower() != "unknown" for title in source_titles if title)
+        matching_source = next((source for source in data["sources"] if source.get("paper_id") == paper_id), None)
+        assert matching_source is not None
+        assert str(matching_source.get("title", "")).strip()
+        assert str(matching_source.get("title", "")).strip().lower() != "unknown"

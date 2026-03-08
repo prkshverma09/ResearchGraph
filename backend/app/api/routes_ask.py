@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -55,6 +55,100 @@ def _insufficient_context_answer(filter_selected_only: bool) -> str:
     )
 
 
+def _normalize_record_id(value: Any) -> str:
+    """Normalize record IDs into table:id string form."""
+    if isinstance(value, dict) and "tb" in value and "id" in value:
+        return f"{value['tb']}:{value['id']}"
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _normalize_source_title(value: Any) -> str:
+    """Normalize source titles and suppress placeholder values."""
+    if value is None:
+        return ""
+    title = str(value).strip()
+    if not title:
+        return ""
+    if title.lower() in {"unknown", "none", "null"}:
+        return ""
+    return title
+
+
+def _build_external_url(arxiv_id: Optional[Any], doi: Optional[Any]) -> Optional[str]:
+    """Build external paper URL from canonical metadata."""
+    arxiv = str(arxiv_id or "").strip()
+    if arxiv:
+        if arxiv.startswith("http://") or arxiv.startswith("https://"):
+            return arxiv
+        return f"https://arxiv.org/abs/{arxiv}"
+
+    doi_value = str(doi or "").strip()
+    if doi_value:
+        if doi_value.startswith("http://") or doi_value.startswith("https://"):
+            return doi_value
+        return f"https://doi.org/{doi_value}"
+    return None
+
+
+async def _build_sources_from_contexts(
+    contexts: List[Dict[str, Any]],
+    db: SurrealDBManager,
+) -> List[Dict[str, Any]]:
+    """Hydrate source titles/links from paper records and build source payload."""
+    paper_ids = []
+    for ctx in contexts:
+        paper_id = str(ctx.get("paper_id", "")).strip()
+        if paper_id:
+            paper_ids.append(paper_id)
+    unique_paper_ids = list(dict.fromkeys(paper_ids))
+
+    paper_by_id: Dict[str, Dict[str, Any]] = {}
+    if unique_paper_ids:
+        rows = await db.execute(
+            """
+            SELECT id, title, doi, arxiv_id
+            FROM paper
+            WHERE string::concat(id) IN $paper_ids
+            """,
+            {"paper_ids": unique_paper_ids},
+        )
+        for row in rows:
+            paper_id = _normalize_record_id(row.get("id"))
+            if paper_id:
+                paper_by_id[paper_id] = row
+
+    sources: List[Dict[str, Any]] = []
+    seen = set()
+    for idx, ctx in enumerate(contexts, start=1):
+        paper_id = str(ctx.get("paper_id", "")).strip()
+        paper_record = paper_by_id.get(paper_id, {})
+        canonical_title = _normalize_source_title(paper_record.get("title"))
+        context_title = _normalize_source_title(ctx.get("title"))
+        source_title = canonical_title or context_title or paper_id or f"Source {idx}"
+
+        key = paper_id or source_title
+        if key in seen:
+            continue
+        seen.add(key)
+
+        source: Dict[str, Any] = {
+            "title": source_title,
+            "paper_id": paper_id,
+            "relevance_score": float(ctx.get("score", 0.0)),
+        }
+        external_url = _build_external_url(
+            arxiv_id=paper_record.get("arxiv_id"),
+            doi=paper_record.get("doi"),
+        )
+        if external_url:
+            source["external_url"] = external_url
+        sources.append(source)
+
+    return sources
+
+
 async def _run_hybrid_pipeline(
     question: str,
     db: SurrealDBManager,
@@ -105,22 +199,7 @@ async def _run_hybrid_pipeline(
         response = await llm.ainvoke(prompt)
 
     answer = response.content if hasattr(response, "content") else str(response)
-    sources = []
-    seen = set()
-    for ctx in contexts:
-        paper_id = str(ctx.get("paper_id", ""))
-        title = str(ctx.get("title", "Unknown"))
-        key = (paper_id, title)
-        if key in seen:
-            continue
-        seen.add(key)
-        sources.append(
-            {
-                "title": title,
-                "paper_id": paper_id,
-                "relevance_score": float(ctx.get("score", 0.0)),
-            }
-        )
+    sources = await _build_sources_from_contexts(contexts, db)
 
     return {
         "answer": answer,

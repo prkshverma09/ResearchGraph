@@ -179,6 +179,12 @@ export default function Home() {
     }
   }
 
+  const handleSourceClick = (paperId: string) => {
+    if (!paperId) return
+    setSelectedPaperId(paperId)
+    setShowGraph(true)
+  }
+
   return (
     <div className="flex h-screen bg-gray-50 dark:bg-gray-950">
       <Sidebar
@@ -252,6 +258,7 @@ export default function Home() {
                   role={msg.role}
                   content={msg.content}
                   sources={msg.sources}
+                  onSourceClick={handleSourceClick}
                 />
               ))}
 

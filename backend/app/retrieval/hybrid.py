@@ -64,6 +64,16 @@ class HybridRetriever:
             deduped.append(value.strip())
         return deduped[:3]
 
+    def _clean_title(self, value: Any) -> str:
+        if value is None:
+            return ""
+        title = str(value).strip()
+        if not title:
+            return ""
+        if title.lower() in {"unknown", "none", "null"}:
+            return ""
+        return title
+
     async def _vector_candidates(
         self,
         query: str,
@@ -231,7 +241,7 @@ class HybridRetriever:
             paper_id = row.get("id")
             if isinstance(paper_id, dict) and "tb" in paper_id and "id" in paper_id:
                 paper_id = f"{paper_id['tb']}:{paper_id['id']}"
-            title = row.get("title", "Unknown")
+            title = self._clean_title(row.get("title"))
             abstract = row.get("abstract", "") or ""
             candidates.append(
                 RetrievalCandidate(
@@ -314,7 +324,10 @@ class HybridRetriever:
                     source="graph_topic",
                     score=1.0,
                     content=row.get("title", ""),
-                    metadata={"paper_id": str(paper_id or ""), "title": row.get("title", "Unknown")},
+                    metadata={
+                        "paper_id": str(paper_id or ""),
+                        "title": self._clean_title(row.get("title")),
+                    },
                 )
             )
         return candidates
@@ -369,7 +382,7 @@ class HybridRetriever:
             paper_id = row.get("id")
             if isinstance(paper_id, dict) and "tb" in paper_id and "id" in paper_id:
                 paper_id = f"{paper_id['tb']}:{paper_id['id']}"
-            title = row.get("title", "Unknown")
+            title = self._clean_title(row.get("title"))
             abstract = row.get("abstract", "") or ""
             content = abstract if abstract else title
             candidates.append(
@@ -483,7 +496,7 @@ class HybridRetriever:
         contexts = [
             {
                 "paper_id": candidate.paper_id,
-                "title": candidate.metadata.get("title", "Unknown"),
+                "title": self._clean_title(candidate.metadata.get("title")),
                 "content": candidate.content,
                 "score": score,
                 "sources": candidate.metadata.get("sources", [candidate.source]),

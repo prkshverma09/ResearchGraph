@@ -7,10 +7,34 @@ interface ChatMessageProps {
   content: string
   sources?: Source[]
   isStreaming?: boolean
+  onSourceClick?: (paperId: string) => void
 }
 
-export default function ChatMessage({ role, content, sources, isStreaming }: ChatMessageProps) {
+export default function ChatMessage({
+  role,
+  content,
+  sources,
+  isStreaming,
+  onSourceClick,
+}: ChatMessageProps) {
   const isUser = role === 'user'
+  const getSourceLabel = (source: Source, idx: number): string => {
+    const title = (source.title || '').trim()
+    if (title && title.toLowerCase() !== 'unknown') {
+      return title
+    }
+    const paperId = (source.paper_id || '').trim()
+    if (paperId) {
+      return paperId
+    }
+    return `Source ${idx + 1}`
+  }
+  const getExternalLabel = (url: string): string => {
+    const lowered = url.toLowerCase()
+    if (lowered.includes('arxiv.org')) return 'arXiv'
+    if (lowered.includes('doi.org')) return 'DOI'
+    return 'Link'
+  }
 
   return (
     <div className={`flex gap-4 ${isUser ? 'justify-end' : 'justify-start'} mb-6`}>
@@ -38,11 +62,30 @@ export default function ChatMessage({ role, content, sources, isStreaming }: Cha
               Sources:
             </div>
             {sources.map((source, idx) => (
-              <div
-                key={idx}
-                className="text-xs text-primary-600 dark:text-primary-400 hover:underline cursor-pointer"
-              >
-                {source.title || source.paper_id || `Source ${idx + 1}`}
+              <div key={idx} className="flex items-center gap-2 text-xs">
+                {source.paper_id && onSourceClick ? (
+                  <button
+                    type="button"
+                    className="text-primary-600 dark:text-primary-400 hover:underline"
+                    onClick={() => onSourceClick(source.paper_id as string)}
+                  >
+                    {getSourceLabel(source, idx)}
+                  </button>
+                ) : (
+                  <span className="text-primary-600 dark:text-primary-400">
+                    {getSourceLabel(source, idx)}
+                  </span>
+                )}
+                {source.external_url && (
+                  <a
+                    href={source.external_url}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="text-gray-500 dark:text-gray-400 hover:underline"
+                  >
+                    {getExternalLabel(source.external_url)}
+                  </a>
+                )}
               </div>
             ))}
           </div>

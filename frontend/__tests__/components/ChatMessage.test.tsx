@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import ChatMessage from '@/app/components/ChatMessage';
 import { Source } from '@/lib/api';
 
@@ -69,6 +70,61 @@ describe('ChatMessage', () => {
       );
 
       expect(screen.getByText('paper123')).toBeInTheDocument();
+    });
+
+    it('should display paper_id when title is Unknown', () => {
+      const sources: Source[] = [{ title: 'Unknown', paper_id: 'paper:abc' }];
+
+      render(
+        <ChatMessage
+          role="assistant"
+          content="Answer"
+          sources={sources}
+        />
+      );
+
+      expect(screen.getByText('paper:abc')).toBeInTheDocument();
+      expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
+    });
+
+    it('should trigger source click handler when source has paper_id', async () => {
+      const onSourceClick = vi.fn();
+      const user = userEvent.setup();
+      const sources: Source[] = [{ title: 'Paper 1', paper_id: 'paper:1' }];
+
+      render(
+        <ChatMessage
+          role="assistant"
+          content="Answer"
+          sources={sources}
+          onSourceClick={onSourceClick}
+        />
+      );
+
+      await user.click(screen.getByRole('button', { name: 'Paper 1' }));
+      expect(onSourceClick).toHaveBeenCalledWith('paper:1');
+    });
+
+    it('should show optional arXiv/DOI side link when external_url exists', () => {
+      const sources: Source[] = [
+        {
+          title: 'Paper 1',
+          paper_id: 'paper:1',
+          external_url: 'https://arxiv.org/abs/2603.05494v1',
+        },
+      ];
+
+      render(
+        <ChatMessage
+          role="assistant"
+          content="Answer"
+          sources={sources}
+        />
+      );
+
+      const link = screen.getByRole('link', { name: 'arXiv' });
+      expect(link).toBeInTheDocument();
+      expect(link).toHaveAttribute('href', 'https://arxiv.org/abs/2603.05494v1');
     });
 
     it('should display streaming indicator when isStreaming is true', () => {

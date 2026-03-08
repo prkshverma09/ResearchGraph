@@ -4,9 +4,10 @@ import GraphVisualization, {
   buildGraphElements,
   truncateNodeLabel,
 } from '@/app/components/GraphVisualization'
+import type { ReactNode } from 'react'
 
 const mockApi = vi.hoisted(() => ({
-  getPaperWithRelations: vi.fn(),
+  getGraphSubgraph: vi.fn(),
 }))
 
 vi.mock('@/lib/api', async () => {
@@ -24,6 +25,10 @@ vi.mock('@/app/components/ThemeProvider', () => ({
   }),
 }))
 
+vi.mock('reagraph', () => ({
+  GraphCanvas: ({ children }: { children?: ReactNode }) => <div data-testid="mock-graph-canvas">{children}</div>,
+}))
+
 describe('GraphVisualization', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -32,13 +37,13 @@ describe('GraphVisualization', () => {
   it('renders empty state when no paper is selected', () => {
     render(<GraphVisualization />)
 
-    expect(screen.getByText('Select a paper to view its graph')).toBeInTheDocument()
+    expect(screen.getByText('Select one or more papers to view their graph')).toBeInTheDocument()
   })
 
   it('renders loading state while graph data is being fetched', async () => {
-    mockApi.getPaperWithRelations.mockImplementation(() => new Promise(() => {}))
+    mockApi.getGraphSubgraph.mockImplementation(() => new Promise(() => {}))
 
-    render(<GraphVisualization paperId="paper-1" />)
+    render(<GraphVisualization paperIds={['paper-1']} />)
 
     expect(await screen.findByText('Loading graph...')).toBeInTheDocument()
   })

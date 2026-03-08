@@ -7,6 +7,7 @@ from app.dependencies import get_db
 from app.db.connection import SurrealDBManager
 from app.models.schemas import (
     PaperWithRelations,
+    GraphSubgraphResponse,
     GraphStatsResponse,
     PaperSearchResult,
     SearchResponse,
@@ -69,6 +70,120 @@ def _build_node(record: dict[str, Any], node_type: str) -> dict[str, Any]:
     return {"id": node_id, "label": label, "type": node_type}
 
 
+async def _build_paper_graph_payload(
+    db_manager: SurrealDBManager,
+    paper_id: str,
+    mode: Literal["semantic", "full"] = "semantic",
+) -> dict[str, Any]:
+    """Build normalized graph payload for one paper."""
+    paper_result = await db_manager.execute(f"SELECT * FROM {paper_id}")
+    if not paper_result:
+        raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found")
+    paper = _normalize_records(paper_result)[0]
+
+    authors_result = await db_manager.execute(
+        f"SELECT ->authored_by->author.* AS authors FROM {paper_id}"
+    )
+    topics_result = await db_manager.execute(
+        f"SELECT ->belongs_to->topic.* AS topics FROM {paper_id}"
+    )
+    citations_result = await db_manager.execute(
+        f"SELECT ->cites->paper.* AS citations FROM {paper_id}"
+    )
+    institutions_result = await db_manager.execute(
+        f"SELECT ->authored_by->author->affiliated_with->institution.* AS institutions FROM {paper_id}"
+    )
+    chunks_result = await db_manager.execute(
+        f"SELECT ->has_chunk->chunk.* AS chunks FROM {paper_id}"
+    )
+
+    authors = _normalize_records((authors_result[0] if authors_result else {}).get("authors", []))
+    topics = _normalize_records((topics_result[0] if topics_result else {}).get("topics", []))
+    citations = _normalize_records((citations_result[0] if citations_result else {}).get("citations", []))
+    institutions = _normalize_records((institutions_result[0] if institutions_result else {}).get("institutions", []))
+    chunks = _normalize_records((chunks_result[0] if chunks_result else {}).get("chunks", []))
+
+    authored_edges = await db_manager.execute(f"SELECT in, out FROM authored_by WHERE in = {paper_id}")
+    topic_edges = await db_manager.execute(f"SELECT in, out FROM belongs_to WHERE in = {paper_id}")
+    citation_edges = await db_manager.execute(f"SELECT in, out FROM cites WHERE in = {paper_id}")
+    chunk_edges = await db_manager.execute(f"SELECT in, out FROM has_chunk WHERE in = {paper_id}")
+
+    affiliation_edges: list[dict[str, Any]] = []
+    author_ids = [author["id"] for author in authors if author.get("id")]
+    if author_ids:
+        author_ids_surreal = ", ".join(author_ids)
+        affiliation_edges = await db_manager.execute(
+            f"SELECT in, out FROM affiliated_with WHERE in INSIDE [{author_ids_surreal}]"
+        )
+
+    nodes_map: dict[str, dict[str, Any]] = {}
+    paper_node = _build_node(paper, "paper")
+    if paper_node["id"]:
+        nodes_map[paper_node["id"]] = paper_node
+
+    for author in authors:
+        node = _build_node(author, "author")
+        if node["id"]:
+            nodes_map[node["id"]] = node
+    for topic in topics:
+        node = _build_node(topic, "topic")
+        if node["id"]:
+            nodes_map[node["id"]] = node
+    for citation in citations:
+        node = _build_node(citation, "paper")
+        if node["id"]:
+            nodes_map[node["id"]] = node
+    for institution in institutions:
+        node = _build_node(institution, "institution")
+        if node["id"]:
+            nodes_map[node["id"]] = node
+    if mode == "full":
+        for chunk in chunks:
+            node = _build_node(chunk, "chunk")
+            if node["id"]:
+                nodes_map[node["id"]] = node
+
+    edge_map: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    def add_edges(rows: list[dict[str, Any]], edge_type: str) -> None:
+        for row in rows or []:
+            source = _record_id_to_str(row.get("in"))
+            target = _record_id_to_str(row.get("out"))
+            if not source or not target:
+                continue
+            edge_key = (source, target, edge_type)
+            edge_map[edge_key] = {
+                "id": f"{edge_type}:{source}->{target}",
+                "source": source,
+                "target": target,
+                "type": edge_type,
+            }
+
+    add_edges(authored_edges, "authored_by")
+    add_edges(topic_edges, "belongs_to")
+    add_edges(citation_edges, "cites")
+    add_edges(affiliation_edges, "affiliated_with")
+    if mode == "full":
+        add_edges(chunk_edges, "has_chunk")
+
+    return_nodes = list(nodes_map.values())
+    typed_edges = list(edge_map.values())
+    counts = {"nodes": len(return_nodes), "edges": len(typed_edges)}
+
+    return {
+        "paper": paper,
+        "mode": mode,
+        "nodes": return_nodes,
+        "edges": typed_edges,
+        "counts": counts,
+        "authors": authors if authors else [],
+        "topics": topics if topics else [],
+        "citations": citations if citations else [],
+        "institutions": institutions if institutions else [],
+        "chunks": chunks if mode == "full" else [],
+    }
+
+
 @router.get("/papers", response_model=SearchResponse)
 async def list_papers(
     db_manager: SurrealDBManager = Depends(get_db),
@@ -119,118 +234,60 @@ async def get_paper_with_relations(
         PaperWithRelations with paper, authors, topics, and citations
     """
     try:
-        paper_result = await db_manager.execute(f"SELECT * FROM {paper_id}")
-        if not paper_result:
-            raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found")
-        paper = _normalize_records(paper_result)[0]
-
-        authors_result = await db_manager.execute(
-            f"SELECT ->authored_by->author.* AS authors FROM {paper_id}"
-        )
-        topics_result = await db_manager.execute(
-            f"SELECT ->belongs_to->topic.* AS topics FROM {paper_id}"
-        )
-        citations_result = await db_manager.execute(
-            f"SELECT ->cites->paper.* AS citations FROM {paper_id}"
-        )
-        institutions_result = await db_manager.execute(
-            f"SELECT ->authored_by->author->affiliated_with->institution.* AS institutions FROM {paper_id}"
-        )
-        chunks_result = await db_manager.execute(
-            f"SELECT ->has_chunk->chunk.* AS chunks FROM {paper_id}"
-        )
-
-        authors = _normalize_records((authors_result[0] if authors_result else {}).get("authors", []))
-        topics = _normalize_records((topics_result[0] if topics_result else {}).get("topics", []))
-        citations = _normalize_records((citations_result[0] if citations_result else {}).get("citations", []))
-        institutions = _normalize_records((institutions_result[0] if institutions_result else {}).get("institutions", []))
-        chunks = _normalize_records((chunks_result[0] if chunks_result else {}).get("chunks", []))
-
-        authored_edges = await db_manager.execute(f"SELECT in, out FROM authored_by WHERE in = {paper_id}")
-        topic_edges = await db_manager.execute(f"SELECT in, out FROM belongs_to WHERE in = {paper_id}")
-        citation_edges = await db_manager.execute(f"SELECT in, out FROM cites WHERE in = {paper_id}")
-        chunk_edges = await db_manager.execute(f"SELECT in, out FROM has_chunk WHERE in = {paper_id}")
-
-        affiliation_edges: list[dict[str, Any]] = []
-        author_ids = [author["id"] for author in authors if author.get("id")]
-        if author_ids:
-            author_ids_surreal = ", ".join(author_ids)
-            affiliation_edges = await db_manager.execute(
-                f"SELECT in, out FROM affiliated_with WHERE in INSIDE [{author_ids_surreal}]"
-            )
-
-        nodes_map: dict[str, dict[str, Any]] = {}
-        paper_node = _build_node(paper, "paper")
-        if paper_node["id"]:
-            nodes_map[paper_node["id"]] = paper_node
-
-        for author in authors:
-            node = _build_node(author, "author")
-            if node["id"]:
-                nodes_map[node["id"]] = node
-        for topic in topics:
-            node = _build_node(topic, "topic")
-            if node["id"]:
-                nodes_map[node["id"]] = node
-        for citation in citations:
-            node = _build_node(citation, "paper")
-            if node["id"]:
-                nodes_map[node["id"]] = node
-        for institution in institutions:
-            node = _build_node(institution, "institution")
-            if node["id"]:
-                nodes_map[node["id"]] = node
-        if mode == "full":
-            for chunk in chunks:
-                node = _build_node(chunk, "chunk")
-                if node["id"]:
-                    nodes_map[node["id"]] = node
-
-        edge_map: dict[tuple[str, str, str], dict[str, Any]] = {}
-
-        def add_edges(rows: list[dict[str, Any]], edge_type: str) -> None:
-            for row in rows or []:
-                source = _record_id_to_str(row.get("in"))
-                target = _record_id_to_str(row.get("out"))
-                if not source or not target:
-                    continue
-                edge_key = (source, target, edge_type)
-                edge_map[edge_key] = {
-                    "id": f"{edge_type}:{source}->{target}",
-                    "source": source,
-                    "target": target,
-                    "type": edge_type,
-                }
-
-        add_edges(authored_edges, "authored_by")
-        add_edges(topic_edges, "belongs_to")
-        add_edges(citation_edges, "cites")
-        add_edges(affiliation_edges, "affiliated_with")
-        if mode == "full":
-            add_edges(chunk_edges, "has_chunk")
-
-        typed_edges = list(edge_map.values())
-
-        return_nodes = list(nodes_map.values())
-        counts = {"nodes": len(return_nodes), "edges": len(typed_edges)}
-
-        return PaperWithRelations(
-            paper=paper,
-            mode=mode,
-            nodes=return_nodes,
-            edges=typed_edges,
-            counts=counts,
-            authors=authors if authors else [],
-            topics=topics if topics else [],
-            citations=citations if citations else [],
-            institutions=institutions if institutions else [],
-            chunks=chunks if mode == "full" else [],
-        )
+        payload = await _build_paper_graph_payload(db_manager=db_manager, paper_id=paper_id, mode=mode)
+        return PaperWithRelations(**payload)
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Get paper error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get paper: {str(e)}")
+
+
+@router.get("/subgraph", response_model=GraphSubgraphResponse)
+async def get_subgraph(
+    paper_ids: list[str] = Query(..., description="One or more paper IDs"),
+    mode: Literal["semantic", "full"] = Query(default="semantic"),
+    db_manager: SurrealDBManager = Depends(get_db),
+):
+    """Get a merged graph payload across multiple selected papers."""
+    normalized_ids = [paper_id.strip() for paper_id in paper_ids if isinstance(paper_id, str) and paper_id.strip()]
+    if not normalized_ids:
+        raise HTTPException(status_code=400, detail="paper_ids must contain at least one paper ID")
+
+    node_map: dict[str, dict[str, Any]] = {}
+    edge_map: dict[tuple[str, str, str], dict[str, Any]] = {}
+    papers: list[dict[str, Any]] = []
+
+    for paper_id in normalized_ids:
+        try:
+            payload = await _build_paper_graph_payload(db_manager=db_manager, paper_id=paper_id, mode=mode)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                continue
+            raise
+
+        papers.append(payload["paper"])
+        for node in payload["nodes"]:
+            node_id = node.get("id")
+            if node_id:
+                node_map[str(node_id)] = node
+        for edge in payload["edges"]:
+            key = (str(edge.get("source", "")), str(edge.get("target", "")), str(edge.get("type", "")))
+            if key[0] and key[1] and key[2]:
+                edge_map[key] = edge
+
+    if not papers:
+        raise HTTPException(status_code=404, detail="None of the requested paper_ids were found")
+
+    nodes = list(node_map.values())
+    edges = list(edge_map.values())
+    return GraphSubgraphResponse(
+        papers=papers,
+        mode=mode,
+        nodes=nodes,
+        edges=edges,
+        counts={"nodes": len(nodes), "edges": len(edges)},
+    )
 
 
 @router.get("/stats", response_model=GraphStatsResponse)

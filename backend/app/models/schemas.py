@@ -99,6 +99,15 @@ class PaperWithRelations(BaseModel):
     chunks: List[Dict[str, Any]] = Field(default_factory=list)
 
 
+class GraphSubgraphResponse(BaseModel):
+    """Aggregated graph payload for multiple selected papers."""
+    papers: List[Dict[str, Any]] = Field(default_factory=list)
+    mode: str = "semantic"
+    nodes: List[Dict[str, Any]] = Field(default_factory=list)
+    edges: List[Dict[str, Any]] = Field(default_factory=list)
+    counts: Dict[str, int] = Field(default_factory=dict)
+
+
 class GraphStatsResponse(BaseModel):
     """Response schema for graph statistics."""
     papers: int = 0

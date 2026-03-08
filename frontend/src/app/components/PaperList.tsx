@@ -4,13 +4,13 @@ import { useState, useEffect } from 'react'
 import { api, PaperSearchResult } from '@/lib/api'
 
 interface PaperListProps {
-  selectedPaperId?: string | null
+  selectedPaperIds?: string[]
   onPaperSelect?: (paperId: string) => void
   onPaperDeselect?: () => void
 }
 
 export default function PaperList({
-  selectedPaperId,
+  selectedPaperIds = [],
   onPaperSelect,
   onPaperDeselect,
 }: PaperListProps) {
@@ -127,7 +127,7 @@ export default function PaperList({
         ) : (
           <div className="space-y-3" role="listbox" aria-label="Paper list">
             {papers.map((paper) => {
-              const isSelected = selectedPaperId === paper.paper_id
+              const isSelected = selectedPaperIds.includes(paper.paper_id)
               const cardClasses = isSelected
                 ? 'border-primary-400 bg-primary-100/80 dark:bg-primary-900/50 shadow-sm'
                 : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'

@@ -19,7 +19,7 @@ export default function Home() {
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null)
+  const [selectedPaperIds, setSelectedPaperIds] = useState<string[]>([])
   const [filterSelectedOnly, setFilterSelectedOnly] = useState(false)
   const [showGraph, setShowGraph] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -44,18 +44,16 @@ export default function Home() {
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return
-    if (filterSelectedOnly && !selectedPaperId) {
+    if (filterSelectedOnly && selectedPaperIds.length === 0) {
       setMessages((prev) => [
         ...prev,
         {
           role: 'assistant',
-          content: 'Select a paper first, or turn off "Selected paper only" to search across all papers.',
+          content: 'Select one or more papers first, or turn off "Selected papers only" to search across all papers.',
         },
       ])
       return
     }
-
-    const selectedPaperIds = selectedPaperId ? [selectedPaperId] : []
 
     const userMessage = input.trim()
     setInput('')
@@ -181,7 +179,7 @@ export default function Home() {
 
   const handleSourceClick = (paperId: string) => {
     if (!paperId) return
-    setSelectedPaperId(paperId)
+    setSelectedPaperIds((prev) => (prev.includes(paperId) ? prev : [...prev, paperId]))
     setShowGraph(true)
   }
 
@@ -190,13 +188,15 @@ export default function Home() {
       <Sidebar
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
-        selectedPaperId={selectedPaperId}
+        selectedPaperIds={selectedPaperIds}
         onPaperSelect={(paperId) => {
-          setSelectedPaperId(paperId)
+          setSelectedPaperIds((prev) => (
+            prev.includes(paperId) ? prev.filter((id) => id !== paperId) : [...prev, paperId]
+          ))
           setShowGraph(true)
         }}
         onPaperDeselect={() => {
-          setSelectedPaperId(null)
+          setSelectedPaperIds([])
           setShowGraph(false)
         }}
         onIngestionComplete={() => {
@@ -283,11 +283,13 @@ export default function Home() {
                     disabled={isLoading}
                     className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                   />
-                  Selected paper only
+                  Selected papers only
                 </label>
                 {filterSelectedOnly && (
                   <span className="text-xs text-primary-700 dark:text-primary-300">
-                    {selectedPaperId ? `Using: ${selectedPaperId}` : 'No paper selected'}
+                    {selectedPaperIds.length > 0
+                      ? `Using ${selectedPaperIds.length} selected paper(s)`
+                      : 'No papers selected'}
                   </span>
                 )}
               </div>
@@ -304,7 +306,7 @@ export default function Home() {
                 />
                 <button
                   onClick={handleSend}
-                  disabled={isLoading || !input.trim() || (filterSelectedOnly && !selectedPaperId)}
+                  disabled={isLoading || !input.trim() || (filterSelectedOnly && selectedPaperIds.length === 0)}
                   className="px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed self-end"
                 >
                   {isLoading ? 'Sending...' : 'Send'}
@@ -315,7 +317,7 @@ export default function Home() {
 
           {showGraph && (
             <div className="hidden lg:block lg:w-1/3 border-l border-gray-200 dark:border-gray-700 p-4 bg-white dark:bg-gray-900">
-              <GraphVisualization paperId={selectedPaperId || undefined} />
+              <GraphVisualization paperIds={selectedPaperIds} />
             </div>
           )}
         </div>

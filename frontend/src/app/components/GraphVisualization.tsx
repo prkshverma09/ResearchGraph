@@ -39,7 +39,7 @@ interface PaperGraphResponse {
 }
 
 interface GraphVisualizationProps {
-  paperId?: string
+  paperIds?: string[]
   width?: number
   height?: number
 }
@@ -356,7 +356,7 @@ export function buildGraphElements(
 }
 
 export default function GraphVisualization({
-  paperId,
+  paperIds = [],
   width,
   height,
 }: GraphVisualizationProps) {
@@ -375,20 +375,19 @@ export default function GraphVisualization({
   useEffect(() => {
     let isCancelled = false
 
-    const loadGraphData = async (id: string) => {
+    const loadGraphData = async (ids: string[]) => {
       setLoading(true)
       setError(null)
 
       try {
         const { api } = await import('@/lib/api')
-        const data = await api.getPaperWithRelations(id)
+        const data = await api.getGraphSubgraph(ids)
         if (isCancelled) {
           return
         }
 
-        const transformed = buildGraphElements(id, data)
-        setNodes(transformed.nodes)
-        setEdges(transformed.edges)
+        setNodes(data.nodes || [])
+        setEdges(data.edges || [])
       } catch (err) {
         if (!isCancelled) {
           console.error('Failed to load graph data:', err)
@@ -403,7 +402,7 @@ export default function GraphVisualization({
       }
     }
 
-    if (!paperId) {
+    if (paperIds.length === 0) {
       setNodes([])
       setEdges([])
       setError(null)
@@ -413,12 +412,12 @@ export default function GraphVisualization({
       return
     }
 
-    void loadGraphData(paperId)
+    void loadGraphData(paperIds)
 
     return () => {
       isCancelled = true
     }
-  }, [paperId])
+  }, [paperIds])
 
   useEffect(() => {
     if (nodes.length === 0) {
@@ -432,7 +431,7 @@ export default function GraphVisualization({
     return () => {
       window.clearTimeout(timer)
     }
-  }, [nodes, paperId])
+  }, [nodes, paperIds])
 
   if (loading) {
     return (
@@ -453,7 +452,7 @@ export default function GraphVisualization({
   if (nodes.length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-gray-500 dark:text-gray-400">
-        Select a paper to view its graph
+        Select one or more papers to view their graph
       </div>
     )
   }
@@ -469,7 +468,7 @@ export default function GraphVisualization({
       style={containerStyle}
       data-testid="graph-panel"
     >
-      <GraphCanvasErrorBoundary key={paperId || 'graph-canvas'}>
+      <GraphCanvasErrorBoundary key={paperIds.join('|') || 'graph-canvas'}>
         <ReagraphCanvas
           ref={graphRef}
           nodes={nodes}

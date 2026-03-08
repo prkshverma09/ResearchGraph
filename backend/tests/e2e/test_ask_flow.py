@@ -65,3 +65,36 @@ class TestAskFlow:
         assert matching_source is not None
         assert str(matching_source.get("title", "")).strip()
         assert str(matching_source.get("title", "")).strip().lower() != "unknown"
+
+    def test_selected_multiple_papers_scopes_retrieval_to_selected_set(
+        self,
+        api_client: httpx.Client,
+        sample_pdf_path: str,
+    ):
+        """Selected-only mode should accept multiple paper IDs and keep sources within that set."""
+        with open(sample_pdf_path, "rb") as f:
+            files = {"file": ("sample_paper.pdf", f, "application/pdf")}
+            pdf_resp = api_client.post("/api/ingest/pdf", files=files)
+        assert pdf_resp.status_code == 200, pdf_resp.text
+        paper_a = pdf_resp.json()["paper_id"]
+
+        arxiv_resp = api_client.post("/api/ingest/arxiv", json={"arxiv_id": "1706.03762"})
+        assert arxiv_resp.status_code == 200, arxiv_resp.text
+        paper_b = arxiv_resp.json()["paper_id"]
+
+        response = api_client.post(
+            "/api/ask",
+            json={
+                "question": "transformers attention architecture",
+                "filter_selected_only": True,
+                "selected_paper_ids": [paper_a, paper_b],
+            },
+            timeout=120.0,
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert "answer" in data
+        selected_set = {paper_a, paper_b}
+        source_ids = {source.get("paper_id") for source in data.get("sources", []) if source.get("paper_id")}
+        assert source_ids
+        assert source_ids.issubset(selected_set)

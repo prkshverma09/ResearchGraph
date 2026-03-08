@@ -41,8 +41,8 @@ describe('PaperList', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
   })
 
-  it('renders selected styles when selectedPaperId matches a paper', async () => {
-    render(<PaperList selectedPaperId="paper-1" />)
+  it('renders selected styles when selectedPaperIds includes papers', async () => {
+    render(<PaperList selectedPaperIds={['paper-1']} />)
 
     const selectedCard = await screen.findByRole('option', { name: /paper one/i })
     const nonSelectedCard = screen.getByRole('option', { name: /paper two/i })
@@ -60,7 +60,7 @@ describe('PaperList', () => {
   it('deselects when clicking outside paper cards in the papers tab', async () => {
     const onPaperDeselect = vi.fn()
     const user = userEvent.setup()
-    render(<PaperList selectedPaperId="paper-1" onPaperDeselect={onPaperDeselect} />)
+    render(<PaperList selectedPaperIds={['paper-1']} onPaperDeselect={onPaperDeselect} />)
 
     const listbox = await screen.findByRole('listbox', { name: /paper list/i })
     await user.click(listbox)
@@ -71,7 +71,7 @@ describe('PaperList', () => {
   it('calls onPaperSelect with the correct paper id when cards are clicked', async () => {
     const onPaperSelect = vi.fn()
     const user = userEvent.setup()
-    render(<PaperList selectedPaperId="paper-1" onPaperSelect={onPaperSelect} />)
+    render(<PaperList selectedPaperIds={['paper-1']} onPaperSelect={onPaperSelect} />)
 
     const selectedCard = await screen.findByRole('option', { name: /paper one/i })
     const nonSelectedCard = screen.getByRole('option', { name: /paper two/i })

@@ -38,3 +38,4 @@ class ResearchAgentState(TypedDict):
     session_id: str
     filter_selected_only: NotRequired[bool]
     selected_paper_ids: NotRequired[List[str]]
+    retrieval_debug: NotRequired[dict]

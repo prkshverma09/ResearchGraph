@@ -307,6 +307,46 @@ async def test_graph_query_tool_filters_results_to_selected_papers(mock_db):
 
 
 @pytest.mark.asyncio
+async def test_graph_query_author_papers_uses_authored_by_relation(mock_db):
+    """Author paper query should use authored_by relation, not legacy relation names."""
+    mock_db.execute = AsyncMock(return_value=[])
+    tool = GraphQueryTool(db_manager=mock_db)
+
+    await tool.ainvoke({"query_type": "author_papers", "author_name": "Alice"})
+
+    query_text = mock_db.execute.call_args.args[0]
+    assert "<-authored_by<-paper.id" in query_text
+    assert "->wrote->paper.id" not in query_text
+
+
+@pytest.mark.asyncio
+async def test_graph_query_topic_papers_uses_belongs_to_relation(mock_db):
+    """Topic paper query should use belongs_to relation, not legacy relation names."""
+    mock_db.execute = AsyncMock(return_value=[])
+    tool = GraphQueryTool(db_manager=mock_db)
+
+    await tool.ainvoke({"query_type": "topic_papers", "topic": "NLP"})
+
+    query_text = mock_db.execute.call_args.args[0]
+    assert "<-belongs_to<-paper.id" in query_text
+    assert "->has_topic->paper.id" not in query_text
+
+
+@pytest.mark.asyncio
+async def test_graph_query_coauthors_uses_authored_by_relation(mock_db):
+    """Coauthor query should traverse authored_by relation for shared papers."""
+    mock_db.execute = AsyncMock(return_value=[])
+    tool = GraphQueryTool(db_manager=mock_db)
+
+    await tool.ainvoke({"query_type": "coauthors", "author_name": "Alice"})
+
+    query_text = mock_db.execute.call_args.args[0]
+    assert "->authored_by->author.id" in query_text
+    assert "<-authored_by<-paper.id" in query_text
+    assert "->wrote->" not in query_text
+
+
+@pytest.mark.asyncio
 async def test_citation_path_tool_enforces_selected_paper_scope(mock_db):
     """CitationPathTool should reject paths outside selected paper set."""
     mock_db.execute = AsyncMock(side_effect=[

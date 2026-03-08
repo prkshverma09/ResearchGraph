@@ -1,6 +1,8 @@
 """LangGraph agent workflow for research queries."""
 
+import ast
 import logging
+import json
 from typing import List, Dict, Any, Literal, Optional
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -16,6 +18,22 @@ from app.agent.state import ResearchAgentState
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_tool_payload(content: Any) -> Any:
+    """Parse ToolMessage payloads that may be JSON or Python-literal strings."""
+    if not isinstance(content, str):
+        return content
+
+    try:
+        return json.loads(content)
+    except Exception:
+        pass
+
+    try:
+        return ast.literal_eval(content)
+    except Exception:
+        return content
 
 
 def create_router_node(llm: ChatOpenAI, tools: List[Any]):
@@ -139,8 +157,7 @@ def create_synthesizer_node(llm: ChatOpenAI):
                 tool_results.append(f"Tool: {tool_name}\nResult: {msg.content}")
                 
                 try:
-                    import json
-                    result_data = json.loads(msg.content) if isinstance(msg.content, str) else msg.content
+                    result_data = _parse_tool_payload(msg.content)
                     
                     if isinstance(result_data, dict):
                         if "papers" in result_data:
@@ -169,11 +186,37 @@ def create_synthesizer_node(llm: ChatOpenAI):
                                     paper_ids.append(citation["id"])
                 except Exception:
                     pass
+
+        if not search_results and not graph_results and not citation_path:
+            scoped_note = (
+                "within the selected paper(s)"
+                if filter_selected_only else "in the current knowledge base"
+            )
+            final_answer = (
+                f"I have insufficient context to answer this request {scoped_note}. "
+                "Try broadening the scope, selecting different papers, or asking a more specific question."
+            )
+            updated_messages = list(messages)
+            updated_messages.append(AIMessage(content=final_answer))
+            return {
+                "messages": updated_messages,
+                "final_answer": final_answer,
+                "search_results": search_results,
+                "graph_results": graph_results,
+                "citation_path": citation_path,
+                "retrieval_debug": {
+                    "vector_hits": 0,
+                    "graph_hits": 0,
+                    "fallback_used": False,
+                    "selected_scope_applied": bool(filter_selected_only),
+                },
+            }
         
         synthesis_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a research assistant. Synthesize the tool results into a clear, 
-            comprehensive answer to the user's query. Include specific paper titles and authors when 
-            available. Cite sources appropriately.
+            ("system", """You are a research assistant. Synthesize only from provided tool results.
+            Do not fabricate papers, authors, citations, or findings not present in tool output.
+            If the provided evidence is insufficient, explicitly state that limitation.
+            Include specific paper titles and authors when available. Cite sources appropriately.
             
             Selected-paper-only mode: {filter_mode_note}"""),
             ("user", """User query: {query}
@@ -228,6 +271,12 @@ Provide a comprehensive answer based on these results.""")
                 "search_results": search_results,
                 "graph_results": graph_results,
                 "citation_path": citation_path,
+                "retrieval_debug": {
+                    "vector_hits": len(search_results),
+                    "graph_hits": len(graph_results) + len(citation_path),
+                    "fallback_used": False,
+                    "selected_scope_applied": bool(filter_selected_only),
+                },
             }
         except Exception as e:
             logger.error(f"Synthesizer node error: {e}")
@@ -238,6 +287,12 @@ Provide a comprehensive answer based on these results.""")
                 "search_results": search_results,
                 "graph_results": graph_results,
                 "citation_path": citation_path,
+                "retrieval_debug": {
+                    "vector_hits": len(search_results),
+                    "graph_hits": len(graph_results) + len(citation_path),
+                    "fallback_used": False,
+                    "selected_scope_applied": bool(filter_selected_only),
+                },
             }
     
     return synthesizer_node

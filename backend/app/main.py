@@ -8,6 +8,7 @@ from app.db.manager import db_manager
 from app.config import settings
 from app.models.schemas import HealthResponse
 from app.observability import setup_langsmith
+from app.db.schema import apply_schema, ensure_chunk_embedding_index
 from app.api import (
     routes_ingest,
     routes_search,
@@ -19,6 +20,7 @@ from app.api import (
 import logging
 
 logger = logging.getLogger(__name__)
+vector_index_ready = False
 
 # Setup LangSmith observability
 setup_langsmith()
@@ -41,8 +43,13 @@ async def lifespan(app: FastAPI):
     # Update the module-level db_manager
     db_manager_module.db_manager = db_manager_instance
     
+    global vector_index_ready
     try:
         await db_manager_instance.connect()
+        await apply_schema(db_manager_instance)
+        vector_index_ready = await ensure_chunk_embedding_index(db_manager_instance)
+        if not vector_index_ready:
+            raise RuntimeError("chunk embedding index is not ready")
         logger.info("SurrealDB connected successfully")
     except Exception as e:
         logger.error(f"Failed to connect to SurrealDB: {e}")
@@ -92,8 +99,9 @@ async def health_check():
         db_connected = await db_manager_module.db_manager.health_check()
     
     return HealthResponse(
-        status="ok" if db_connected else "error",
+        status="ok" if (db_connected and vector_index_ready) else "error",
         db_connected=db_connected,
+        vector_index_ready=vector_index_ready,
     )
 
 

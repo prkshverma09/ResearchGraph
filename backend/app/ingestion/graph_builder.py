@@ -83,7 +83,11 @@ class GraphBuilder:
         paper_id = self._generate_paper_id(entities.title)
         
         # Build SET clause
-        fields = [f"title = {self._escape_string(entities.title)}"]
+        fields = [
+            f"title = {self._escape_string(entities.title)}",
+            "created_at = IF created_at = NONE THEN time::now() ELSE created_at END",
+            "updated_at = time::now()",
+        ]
         
         # Add optional fields if present
         if entities.year is not None:

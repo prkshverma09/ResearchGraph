@@ -46,7 +46,54 @@ class IngestionPipeline:
         self.chunker = chunker or TextChunker()
         self.extractor = extractor or EntityExtractor()
         self.embedder = embedder or EmbeddingService()
+        self.graph_builder = graph_builder or persist_graph
         self.vector_store = vector_store or VectorStoreService(db_manager)
+
+    async def _persist_graph_entities(self, entities: ExtractedEntities) -> str:
+        """Persist graph entities using either callable or builder object injection."""
+        builder_method = getattr(self.graph_builder, "persist_graph", None)
+        if (
+            builder_method is not None
+            and callable(builder_method)
+            and "persist_graph" in vars(self.graph_builder)
+        ):
+            return await builder_method(self.db_manager, entities)
+        if callable(self.graph_builder):
+            return await self.graph_builder(self.db_manager, entities)
+        if builder_method is not None and callable(builder_method):
+            return await builder_method(self.db_manager, entities)
+        raise TypeError("graph_builder must be callable or expose persist_graph()")
+
+    def _enrich_chunk_metadata(
+        self,
+        chunks: List[Chunk],
+        entities: ExtractedEntities,
+    ) -> List[Chunk]:
+        """Attach paper-level metadata to each chunk for better retrieval filtering."""
+        authors = [author.name for author in entities.authors if author.name]
+        topics = [topic for topic in entities.topics if topic]
+        base_metadata = {
+            "title": entities.title,
+            "paper_title": entities.title,
+            "authors": authors,
+            "topics": topics,
+            "year": entities.year,
+            "venue": entities.venue,
+        }
+
+        enriched_chunks: List[Chunk] = []
+        for chunk in chunks:
+            merged = chunk.metadata.copy()
+            merged.update(base_metadata)
+            enriched_chunks.append(
+                Chunk(
+                    content=chunk.content,
+                    index=chunk.index,
+                    metadata=merged,
+                    embedding=chunk.embedding,
+                )
+            )
+        return enriched_chunks
     
     async def ingest_pdf(self, file_path: str) -> PaperIngestionResult:
         """Ingest a paper from a PDF file.
@@ -69,6 +116,7 @@ class IngestionPipeline:
             # Step 3: Extract entities
             logger.info("Extracting entities from document")
             entities = await self.extractor.extract(raw_doc.text, existing_metadata=raw_doc.metadata)
+            chunks = self._enrich_chunk_metadata(chunks, entities)
             
             # Step 4: Generate embeddings
             logger.info("Generating embeddings for chunks")
@@ -76,11 +124,16 @@ class IngestionPipeline:
             
             # Step 5: Persist graph nodes and edges
             logger.info("Persisting graph nodes and edges")
-            paper_id = await persist_graph(self.db_manager, entities)
+            paper_id = await self._persist_graph_entities(entities)
             
             # Step 6: Store chunks with embeddings
             logger.info("Storing chunks with embeddings")
             await self.vector_store.add_paper_chunks(paper_id, chunks_with_embeddings)
+            await self.vector_store.link_chunks_to_topics(
+                paper_id=paper_id,
+                chunks_with_embeddings=chunks_with_embeddings,
+                topics=entities.topics,
+            )
             
             semantic_counts, full_counts = await self._compute_persisted_counts(paper_id)
             
@@ -119,9 +172,15 @@ class IngestionPipeline:
             # Step 2-6: Same as PDF ingestion
             chunks = self.chunker.chunk(raw_doc)
             entities = await self.extractor.extract(raw_doc.text, existing_metadata=raw_doc.metadata)
+            chunks = self._enrich_chunk_metadata(chunks, entities)
             chunks_with_embeddings = self.embedder.embed_chunks(chunks)
-            paper_id = await persist_graph(self.db_manager, entities)
+            paper_id = await self._persist_graph_entities(entities)
             await self.vector_store.add_paper_chunks(paper_id, chunks_with_embeddings)
+            await self.vector_store.link_chunks_to_topics(
+                paper_id=paper_id,
+                chunks_with_embeddings=chunks_with_embeddings,
+                topics=entities.topics,
+            )
             
             semantic_counts, full_counts = await self._compute_persisted_counts(paper_id)
             
@@ -160,9 +219,15 @@ class IngestionPipeline:
             # Step 2-6: Same as PDF ingestion
             chunks = self.chunker.chunk(raw_doc)
             entities = await self.extractor.extract(raw_doc.text, existing_metadata=raw_doc.metadata)
+            chunks = self._enrich_chunk_metadata(chunks, entities)
             chunks_with_embeddings = self.embedder.embed_chunks(chunks)
-            paper_id_result = await persist_graph(self.db_manager, entities)
+            paper_id_result = await self._persist_graph_entities(entities)
             await self.vector_store.add_paper_chunks(paper_id_result, chunks_with_embeddings)
+            await self.vector_store.link_chunks_to_topics(
+                paper_id=paper_id_result,
+                chunks_with_embeddings=chunks_with_embeddings,
+                topics=entities.topics,
+            )
             
             semantic_counts, full_counts = await self._compute_persisted_counts(paper_id_result)
             

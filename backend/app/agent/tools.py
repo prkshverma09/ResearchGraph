@@ -199,6 +199,8 @@ class GraphQueryTool:
 
     def _record_id_to_str(self, value: Any) -> str:
         """Normalize SurrealDB record IDs to string format."""
+        if type(value).__name__ == "RecordID":
+            return str(value)
         if isinstance(value, dict) and "tb" in value and "id" in value:
             return f"{value['tb']}:{value['id']}"
         return str(value)
@@ -247,7 +249,7 @@ class GraphQueryTool:
                     SELECT paper.*
                     FROM paper
                     WHERE id IN (
-                        SELECT ->wrote->paper.id
+                        SELECT <-authored_by<-paper.id
                         FROM author
                         WHERE name = $author_name
                     )
@@ -314,7 +316,7 @@ class GraphQueryTool:
                     SELECT paper.*
                     FROM paper
                     WHERE id IN (
-                        SELECT ->has_topic->paper.id
+                        SELECT <-belongs_to<-paper.id
                         FROM topic
                         WHERE name = $topic
                     )
@@ -349,10 +351,10 @@ class GraphQueryTool:
                         SELECT DISTINCT author.*
                         FROM author
                         WHERE id IN (
-                            SELECT ->wrote->author.id
+                            SELECT ->authored_by->author.id
                             FROM paper
                             WHERE id IN (
-                                SELECT ->wrote->paper.id
+                                SELECT <-authored_by<-paper.id
                                 FROM author
                                 WHERE name = $author_name
                             )
@@ -365,10 +367,10 @@ class GraphQueryTool:
                         SELECT DISTINCT author.*
                         FROM author
                         WHERE id IN (
-                            SELECT ->wrote->author.id
+                            SELECT ->authored_by->author.id
                             FROM paper
                             WHERE id IN (
-                                SELECT ->wrote->paper.id
+                                SELECT <-authored_by<-paper.id
                                 FROM author
                                 WHERE name = $author_name
                             )

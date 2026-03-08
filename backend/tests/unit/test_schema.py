@@ -1,6 +1,7 @@
 """Unit tests for schema module."""
 
 import pytest
+from unittest.mock import AsyncMock, Mock
 
 
 def test_schema_statements_are_valid_surrealql():
@@ -54,3 +55,37 @@ def test_schema_includes_vector_index():
     assert "INDEX" in schema_text
     assert "CHUNK" in schema_text
     assert "EMBEDDING" in schema_text
+
+
+@pytest.mark.asyncio
+async def test_ensure_chunk_embedding_index_detects_index_in_info():
+    """ensure_chunk_embedding_index should return True when index exists."""
+    from app.db.schema import ensure_chunk_embedding_index
+
+    mock_db = Mock()
+    mock_db.execute = AsyncMock(return_value=[])
+    mock_db.query_raw = AsyncMock(
+        return_value={
+            "indexes": {
+                "chunk_embedding_idx": "DEFINE INDEX chunk_embedding_idx ON chunk FIELDS embedding HNSW DIMENSION 1536 TYPE F32 DIST COSINE"
+            }
+        }
+    )
+
+    ready = await ensure_chunk_embedding_index(mock_db)
+    assert ready is True
+    mock_db.execute.assert_called_once()
+    mock_db.query_raw.assert_called_once_with("INFO FOR TABLE chunk")
+
+
+@pytest.mark.asyncio
+async def test_ensure_chunk_embedding_index_returns_false_when_missing():
+    """ensure_chunk_embedding_index should return False when index is absent."""
+    from app.db.schema import ensure_chunk_embedding_index
+
+    mock_db = Mock()
+    mock_db.execute = AsyncMock(return_value=[])
+    mock_db.query_raw = AsyncMock(return_value={"indexes": {"other_idx": "..."}})
+
+    ready = await ensure_chunk_embedding_index(mock_db)
+    assert ready is False

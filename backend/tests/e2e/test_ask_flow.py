@@ -38,3 +38,24 @@ class TestAskFlow:
         assert response.status_code == 200
         data = response.json()
         assert data["session_id"] == session_id
+
+    def test_selected_paper_query_returns_context(self, api_client: httpx.Client, sample_pdf_path: str):
+        """Selected-paper scope should still return contextual answer for matching query."""
+        with open(sample_pdf_path, "rb") as f:
+            files = {"file": ("sample_paper.pdf", f, "application/pdf")}
+            ingest_response = api_client.post("/api/ingest/pdf", files=files)
+        assert ingest_response.status_code == 200, ingest_response.text
+        paper_id = ingest_response.json()["paper_id"]
+
+        response = api_client.post(
+            "/api/ask",
+            json={
+                "question": "llms trained to censor politically sensitive topics",
+                "filter_selected_only": True,
+                "selected_paper_ids": [paper_id],
+            },
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert "insufficient context" not in data.get("answer", "").lower()
+        assert len(data.get("sources", [])) >= 1

@@ -70,6 +70,7 @@ class AskResponse(BaseModel):
     sources: List[Dict[str, Any]] = Field(default_factory=list, description="List of source papers/references")
     graph_paths: List[List[Dict[str, Any]]] = Field(default_factory=list, description="Citation paths found")
     session_id: str
+    retrieval_debug: Optional[Dict[str, Any]] = None
 
 
 class CitationPathRequest(BaseModel):
@@ -131,3 +132,4 @@ class HealthResponse(BaseModel):
     """Response schema for health check."""
     status: str
     db_connected: bool
+    vector_index_ready: Optional[bool] = None

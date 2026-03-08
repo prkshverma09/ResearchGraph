@@ -120,11 +120,37 @@ class SurrealDBManager:
                 result = await self.client.query(query, params)
             else:
                 result = await self.client.query(query)
+
+            if isinstance(result, str):
+                raise Exception(result)
             
-            # Extract results from SurrealDB response format
+            # Extract results from SurrealDB response format.
+            # SDK responses may be:
+            # - list[{"result": [...]}]
+            # - {"result": [...]} or {"result": {...}}
+            # - plain list of rows
+            if isinstance(result, dict):
+                if "error" in result and result["error"]:
+                    raise Exception(result["error"])
+                if "result" in result:
+                    value = result["result"]
+                    if isinstance(value, list):
+                        return value
+                    if isinstance(value, dict):
+                        return [value]
+                    return []
+                return [result]
             if isinstance(result, list) and len(result) > 0:
-                if isinstance(result[0], dict) and "result" in result[0]:
-                    return result[0]["result"]
+                first = result[0]
+                if isinstance(first, dict) and "error" in first and first["error"]:
+                    raise Exception(first["error"])
+                if isinstance(first, dict) and "result" in first:
+                    value = first["result"]
+                    if isinstance(value, list):
+                        return value
+                    if isinstance(value, dict):
+                        return [value]
+                    return []
                 return result
             return []
         except Exception as e:
@@ -146,6 +172,18 @@ class SurrealDBManager:
             List of result dictionaries
         """
         return await self.execute(query, params)
+
+    async def query_raw(
+        self,
+        query: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """Execute a SurrealQL query and return the raw client response."""
+        if not self._connected or not self.client:
+            raise RuntimeError("Not connected to SurrealDB. Call connect() first.")
+        if params:
+            return await self.client.query(query, params)
+        return await self.client.query(query)
     
     async def __aenter__(self):
         """Async context manager entry."""

@@ -54,6 +54,7 @@ def test_ask_response_includes_sources():
     assert len(response.sources) == 1
     assert response.session_id == "session:123"
     assert response.graph_paths == []
+    assert response.retrieval_debug is None
 
 
 def test_ingest_arxiv_request_validates():
@@ -202,6 +203,10 @@ def test_health_response():
     response = HealthResponse(status="ok", db_connected=True)
     assert response.status == "ok"
     assert response.db_connected is True
+    assert response.vector_index_ready is None
     
     response_error = HealthResponse(status="error", db_connected=False)
     assert response_error.db_connected is False
+
+    response_ready = HealthResponse(status="ok", db_connected=True, vector_index_ready=True)
+    assert response_ready.vector_index_ready is True

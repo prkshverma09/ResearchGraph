@@ -263,13 +263,22 @@ async def get_graph_stats(
         belongs_to_result = await db_manager.execute("SELECT COUNT() AS count FROM belongs_to GROUP ALL")
         affiliated_with_result = await db_manager.execute("SELECT COUNT() AS count FROM affiliated_with GROUP ALL")
         has_chunk_result = await db_manager.execute("SELECT COUNT() AS count FROM has_chunk GROUP ALL")
+        mentions_topic_result = await db_manager.execute("SELECT COUNT() AS count FROM mentions_topic GROUP ALL")
 
         authored_by_count = authored_by_result[0].get("count", 0) if authored_by_result else 0
         cites_count = cites_result[0].get("count", 0) if cites_result else 0
         belongs_to_count = belongs_to_result[0].get("count", 0) if belongs_to_result else 0
         affiliated_with_count = affiliated_with_result[0].get("count", 0) if affiliated_with_result else 0
         has_chunk_count = has_chunk_result[0].get("count", 0) if has_chunk_result else 0
-        edges_count = authored_by_count + cites_count + belongs_to_count + affiliated_with_count + has_chunk_count
+        mentions_topic_count = mentions_topic_result[0].get("count", 0) if mentions_topic_result else 0
+        edges_count = (
+            authored_by_count
+            + cites_count
+            + belongs_to_count
+            + affiliated_with_count
+            + has_chunk_count
+            + mentions_topic_count
+        )
         
         return GraphStatsResponse(
             papers=papers_count,
@@ -299,6 +308,7 @@ async def delete_paper(
                         chunk_id_str = f"{chunk_id['tb']}:{chunk_id['id']}"
                     else:
                         chunk_id_str = str(chunk_id)
+                    await db_manager.execute(f"DELETE mentions_topic WHERE in = {chunk_id_str}")
                     await db_manager.execute(f"DELETE {chunk_id_str}")
         
         # Delete paper
@@ -318,7 +328,7 @@ async def clear_database(
     try:
         tables = [
             "paper", "author", "topic", "institution", "chunk", "session",
-            "authored_by", "cites", "belongs_to", "affiliated_with", "has_chunk"
+            "authored_by", "cites", "belongs_to", "affiliated_with", "has_chunk", "mentions_topic"
         ]
         for table in tables:
             await db_manager.execute(f"DELETE {table}")
@@ -327,3 +337,42 @@ async def clear_database(
     except Exception as e:
         logger.error(f"Clear database error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to clear database: {str(e)}")
+
+
+@router.get("/integrity")
+async def get_integrity_report(
+    db_manager: SurrealDBManager = Depends(get_db),
+):
+    """Return lightweight integrity checks for paper/chunk linkage."""
+    try:
+        paper_rows = await db_manager.execute("SELECT id FROM paper")
+        mismatches = []
+        for row in paper_rows or []:
+            paper_id = _record_id_to_str(row.get("id"))
+            if not paper_id:
+                continue
+            edge_rows = await db_manager.execute(
+                f"SELECT out FROM has_chunk WHERE in = {paper_id}"
+            )
+            metadata_rows = await db_manager.execute(
+                "SELECT id FROM chunk WHERE metadata.paper_id = $paper_id",
+                {"paper_id": paper_id},
+            )
+            edge_count = len(edge_rows)
+            metadata_count = len(metadata_rows)
+            if edge_count != metadata_count:
+                mismatches.append(
+                    {
+                        "paper_id": paper_id,
+                        "edge_count": edge_count,
+                        "metadata_count": metadata_count,
+                    }
+                )
+        return {
+            "papers_checked": len(paper_rows or []),
+            "mismatch_count": len(mismatches),
+            "mismatches": mismatches,
+        }
+    except Exception as e:
+        logger.error(f"Integrity report error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to compute integrity report: {str(e)}")

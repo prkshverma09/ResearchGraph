@@ -212,6 +212,73 @@ async def test_persist_graph_handles_citations(db_manager):
 
 
 @pytest.mark.asyncio
+async def test_persist_graph_skips_placeholder_only_citations(db_manager):
+    """Placeholder citation strings should not create stub papers or cite edges."""
+    from app.db.schema import apply_schema
+
+    await apply_schema(db_manager)
+
+    entities = ExtractedEntities(
+        title="Paper With Placeholder Citation",
+        authors=[],
+        topics=[],
+        institutions=[],
+        citations=["arXiv:1706.03762v7 [cs.CL]"],
+    )
+
+    await persist_graph(db_manager, entities)
+
+    builder = GraphBuilder()
+    paper_id = builder._generate_paper_id("Paper With Placeholder Citation")
+    placeholder_id = builder._generate_paper_id("arXiv:1706.03762v7 [cs.CL]")
+
+    cite_edges = await db_manager.execute(
+        f"SELECT * FROM cites WHERE in = {paper_id} AND out = {placeholder_id}"
+    )
+    placeholder_node = await db_manager.execute(f"SELECT * FROM {placeholder_id}")
+
+    assert cite_edges == []
+    assert placeholder_node == []
+
+
+@pytest.mark.asyncio
+async def test_persist_graph_keeps_valid_citations_and_drops_placeholders(db_manager):
+    """Mixed citation lists should only persist title-like citations."""
+    from app.db.schema import apply_schema
+
+    await apply_schema(db_manager)
+
+    entities = ExtractedEntities(
+        title="Paper With Mixed Citations",
+        authors=[],
+        topics=[],
+        institutions=[],
+        citations=["Valid Citation Title", "arXiv:1706.03762v7 [cs.CL]"],
+    )
+
+    await persist_graph(db_manager, entities)
+
+    builder = GraphBuilder()
+    paper_id = builder._generate_paper_id("Paper With Mixed Citations")
+    valid_id = builder._generate_paper_id("Valid Citation Title")
+    placeholder_id = builder._generate_paper_id("arXiv:1706.03762v7 [cs.CL]")
+
+    valid_edge = await db_manager.execute(
+        f"SELECT * FROM cites WHERE in = {paper_id} AND out = {valid_id}"
+    )
+    valid_node = await db_manager.execute(f"SELECT * FROM {valid_id}")
+    placeholder_edge = await db_manager.execute(
+        f"SELECT * FROM cites WHERE in = {paper_id} AND out = {placeholder_id}"
+    )
+    placeholder_node = await db_manager.execute(f"SELECT * FROM {placeholder_id}")
+
+    assert len(valid_edge) == 1
+    assert len(valid_node) == 1
+    assert placeholder_edge == []
+    assert placeholder_node == []
+
+
+@pytest.mark.asyncio
 async def test_persist_graph_transaction_rollback_on_error(db_manager):
     """persist_graph should rollback transaction on error."""
     from app.db.schema import apply_schema

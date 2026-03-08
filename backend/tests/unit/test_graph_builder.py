@@ -370,3 +370,64 @@ def test_build_graph_handles_empty_lists():
     assert author_stmts == []
     assert topic_stmts == []
     assert institution_stmts == []
+
+
+def test_normalize_citation_title_preserves_human_readable_titles():
+    """Title-like citations should survive normalization."""
+    from app.ingestion.graph_builder import GraphBuilder
+
+    builder = GraphBuilder()
+
+    assert (
+        builder.normalize_citation_title(" Attention Is All You Need ")
+        == "Attention Is All You Need"
+    )
+
+
+def test_normalize_citation_title_rejects_arxiv_identifier_only_values():
+    """Identifier-only arXiv placeholders should be rejected."""
+    from app.ingestion.graph_builder import GraphBuilder
+
+    builder = GraphBuilder()
+
+    assert builder.normalize_citation_title("arXiv:1706.03762v7 [cs.CL]") is None
+
+
+def test_normalize_citation_title_rejects_doi_and_url_only_values():
+    """DOI-only and URL-only citations should be rejected."""
+    from app.ingestion.graph_builder import GraphBuilder
+
+    builder = GraphBuilder()
+
+    assert builder.normalize_citation_title("10.48550/arXiv.1706.03762") is None
+    assert builder.normalize_citation_title("https://arxiv.org/abs/1706.03762") is None
+
+
+def test_normalize_citation_title_rejects_blank_and_symbol_heavy_values():
+    """Blank and non-title strings should be rejected."""
+    from app.ingestion.graph_builder import GraphBuilder
+
+    builder = GraphBuilder()
+
+    assert builder.normalize_citation_title("   ") is None
+    assert builder.normalize_citation_title("[cs.CL]") is None
+
+
+def test_build_citation_stub_nodes_only_persists_meaningful_citations():
+    """Only meaningful citation titles should produce stub paper nodes."""
+    from app.ingestion.graph_builder import GraphBuilder
+
+    builder = GraphBuilder()
+
+    statements = builder.build_citation_stub_nodes(
+        [
+            "Attention Is All You Need",
+            "arXiv:1706.03762v7 [cs.CL]",
+            "10.48550/arXiv.1706.03762",
+            "https://arxiv.org/abs/1706.03762",
+            "  ",
+        ]
+    )
+
+    assert len(statements) == 1
+    assert "Attention Is All You Need" in statements[0]

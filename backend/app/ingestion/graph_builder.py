@@ -12,6 +12,17 @@ logger = logging.getLogger(__name__)
 
 class GraphBuilder:
     """Builds SurrealDB graph nodes and edges from extracted entities."""
+
+    _ARXIV_ONLY_RE = re.compile(
+        r"^\s*arxiv\s*:\s*[A-Za-z0-9./-]+(?:v\d+)?(?:\s*\[[^\]]+\])?\s*$",
+        re.IGNORECASE,
+    )
+    _DOI_ONLY_RE = re.compile(
+        r"^\s*(?:doi\s*:?\s*)?10\.\d{4,9}/\S+\s*$",
+        re.IGNORECASE,
+    )
+    _URL_ONLY_RE = re.compile(r"^\s*https?://\S+\s*$", re.IGNORECASE)
+    _BRACKETED_ID_RE = re.compile(r"^\s*\[[^\]]+\]\s*$")
     
     def _generate_paper_id(self, title: str) -> str:
         """Generate deterministic paper ID from title.
@@ -207,6 +218,56 @@ class GraphBuilder:
         
         return statements
 
+    def normalize_citation_title(self, value: Optional[str]) -> Optional[str]:
+        """Normalize citation titles and reject low-information placeholders."""
+        if value is None:
+            return None
+
+        title = str(value).strip()
+        if not title:
+            return None
+
+        if self._ARXIV_ONLY_RE.fullmatch(title):
+            return None
+        if self._DOI_ONLY_RE.fullmatch(title):
+            return None
+        if self._URL_ONLY_RE.fullmatch(title):
+            return None
+        if self._BRACKETED_ID_RE.fullmatch(title):
+            return None
+
+        alnum_count = sum(1 for char in title if char.isalnum())
+        alpha_count = sum(1 for char in title if char.isalpha())
+        symbol_count = sum(1 for char in title if not char.isalnum() and not char.isspace())
+
+        if alnum_count < 8:
+            return None
+        if alpha_count < 4:
+            return None
+        if len(title.split()) < 2 and len(title) < 20:
+            return None
+        if symbol_count > alpha_count:
+            return None
+
+        return title
+
+    def filter_citation_titles(self, cited_titles: List[str]) -> List[str]:
+        """Return only citation titles that look meaningful enough to persist."""
+        filtered: List[str] = []
+        seen: set[str] = set()
+
+        for raw_title in cited_titles:
+            title = self.normalize_citation_title(raw_title)
+            if not title:
+                continue
+            normalized = title.casefold()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            filtered.append(title)
+
+        return filtered
+
     def build_citation_stub_nodes(
         self,
         cited_titles: List[str]
@@ -216,11 +277,9 @@ class GraphBuilder:
         This ensures cited paper targets exist and can be rendered in graph traversal.
         """
         statements = []
-        for title in cited_titles:
-            if not title or not title.strip():
-                continue
+        for title in self.filter_citation_titles(cited_titles):
             cited_id = self._generate_paper_id(title)
-            set_clause = f"title = {self._escape_string(title.strip())}"
+            set_clause = f"title = {self._escape_string(title)}"
             statements.append(f"UPSERT {cited_id} SET {set_clause}")
         return statements
     
@@ -320,11 +379,12 @@ async def persist_graph(
     ]
     
     # Generate citation paper IDs (for papers that are cited)
+    filtered_citations = builder.filter_citation_titles(entities.citations)
     cited_paper_ids = [
         builder._generate_paper_id(citation)
-        for citation in entities.citations
+        for citation in filtered_citations
     ]
-    citation_stub_stmts = builder.build_citation_stub_nodes(entities.citations)
+    citation_stub_stmts = builder.build_citation_stub_nodes(filtered_citations)
     
     # Generate edges
     authored_by_stmts = builder.build_authored_by_edges(paper_id, author_ids)

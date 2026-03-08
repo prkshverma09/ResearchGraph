@@ -2,23 +2,49 @@
 
 import {
   Component,
+  forwardRef,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type ComponentType,
   type CSSProperties,
   type ErrorInfo,
+  type Ref,
   type ReactNode,
 } from 'react'
 import dynamic from 'next/dynamic'
-import type { GraphCanvasRef, GraphEdge, GraphNode, InternalGraphNode, Theme } from 'reagraph'
+import type {
+  GraphCanvasProps,
+  GraphCanvasRef,
+  GraphEdge,
+  GraphNode,
+  InternalGraphNode,
+  Theme,
+} from 'reagraph'
 import { useTheme } from './ThemeProvider'
 
-const ReagraphCanvas = dynamic(
-  () => import('reagraph').then((mod) => mod.GraphCanvas),
+type ReagraphCanvasProps = GraphCanvasProps
+
+const DynamicReagraphCanvas = dynamic(
+  () =>
+    import('reagraph').then((mod) => {
+      const WrappedGraphCanvas = ({
+        forwardedRef,
+        ...props
+      }: ReagraphCanvasProps & { forwardedRef?: Ref<GraphCanvasRef> }) => (
+        <mod.GraphCanvas {...props} ref={forwardedRef} />
+      )
+      WrappedGraphCanvas.displayName = 'DynamicWrappedGraphCanvas'
+      return WrappedGraphCanvas
+    }),
   { ssr: false }
-) as ComponentType<any>
+)
+
+const ReagraphCanvas = forwardRef<GraphCanvasRef, ReagraphCanvasProps>((props, ref) => (
+  <DynamicReagraphCanvas {...props} forwardedRef={ref} />
+))
+ReagraphCanvas.displayName = 'ReagraphCanvas'
 
 type NodeType = 'paper' | 'author' | 'topic'
 type LinkType = 'cites' | 'authored_by' | 'belongs_to'
@@ -362,6 +388,8 @@ export default function GraphVisualization({
 }: GraphVisualizationProps) {
   const { theme } = useTheme()
   const graphRef = useRef<GraphCanvasRef | null>(null)
+  const activeRequestIdRef = useRef(0)
+  const [hasGraphRef, setHasGraphRef] = useState(false)
 
   const [nodes, setNodes] = useState<GraphNode[]>([])
   const [edges, setEdges] = useState<GraphEdge[]>([])
@@ -371,67 +399,125 @@ export default function GraphVisualization({
   const [hoveredNode, setHoveredNode] = useState<HoveredNodeInfo | null>(null)
 
   const graphTheme = useMemo(() => createGraphTheme(theme), [theme])
+  const normalizedPaperIds = useMemo(() => {
+    const cleaned = paperIds
+      .map((paperId) => (typeof paperId === 'string' ? paperId.trim() : ''))
+      .filter((paperId) => paperId.length > 0)
+    return [...new Set(cleaned)].sort()
+  }, [paperIds])
+  const selectionKey = normalizedPaperIds.join('|')
+  const isGraphReady = hasGraphRef && !loading && !error && nodes.length > 0
+
+  const setGraphCanvasRef = useCallback((instance: GraphCanvasRef | null) => {
+    graphRef.current = instance
+    setHasGraphRef(Boolean(instance))
+  }, [])
+
+  const fitGraph = useCallback((animated: boolean) => {
+    const ref = graphRef.current
+    if (!ref || !isGraphReady) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.debug('Graph controls unavailable: graph ref not ready')
+      }
+      return
+    }
+    ref.fitNodesInView(undefined, { animated })
+  }, [isGraphReady])
+
+  const handleZoomIn = useCallback(() => {
+    const ref = graphRef.current
+    if (!ref || !isGraphReady) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.debug('Graph controls unavailable: graph ref not ready')
+      }
+      return
+    }
+    ref.zoomIn()
+  }, [isGraphReady])
+
+  const handleZoomOut = useCallback(() => {
+    const ref = graphRef.current
+    if (!ref || !isGraphReady) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.debug('Graph controls unavailable: graph ref not ready')
+      }
+      return
+    }
+    ref.zoomOut()
+  }, [isGraphReady])
+
+  const handleFit = useCallback(() => {
+    fitGraph(true)
+  }, [fitGraph])
 
   useEffect(() => {
-    let isCancelled = false
+    let isDisposed = false
+
+    // Always clear graph state on selection changes to avoid showing stale graphs.
+    setHasGraphRef(false)
+    setNodes([])
+    setEdges([])
+    setError(null)
+    setSelectedNodeId(null)
+    setHoveredNode(null)
+
+    if (!selectionKey) {
+      setLoading(false)
+      return
+    }
 
     const loadGraphData = async (ids: string[]) => {
+      const requestId = activeRequestIdRef.current + 1
+      activeRequestIdRef.current = requestId
       setLoading(true)
-      setError(null)
 
       try {
         const { api } = await import('@/lib/api')
         const data = await api.getGraphSubgraph(ids)
-        if (isCancelled) {
+        if (isDisposed || activeRequestIdRef.current !== requestId) {
           return
         }
 
         setNodes(data.nodes || [])
-        setEdges(data.edges || [])
+        const normalizedEdges: GraphEdge[] = (data.edges || []).map((edge, index) => ({
+          ...edge,
+          id: edge.id || `edge-${edge.type}-${edge.source}-${edge.target}-${index}`,
+        }))
+        setEdges(normalizedEdges)
       } catch (err) {
-        if (!isCancelled) {
+        if (!isDisposed && activeRequestIdRef.current === requestId) {
           console.error('Failed to load graph data:', err)
           setError('Failed to load graph data')
           setNodes([])
           setEdges([])
         }
       } finally {
-        if (!isCancelled) {
+        if (!isDisposed && activeRequestIdRef.current === requestId) {
           setLoading(false)
         }
       }
     }
 
-    if (paperIds.length === 0) {
-      setNodes([])
-      setEdges([])
-      setError(null)
-      setSelectedNodeId(null)
-      setHoveredNode(null)
-      setLoading(false)
-      return
-    }
-
-    void loadGraphData(paperIds)
+    void loadGraphData(normalizedPaperIds)
 
     return () => {
-      isCancelled = true
+      isDisposed = true
     }
-  }, [paperIds])
+  }, [normalizedPaperIds, selectionKey])
 
   useEffect(() => {
-    if (nodes.length === 0) {
+    if (!isGraphReady) {
       return
     }
 
     const timer = window.setTimeout(() => {
-      graphRef.current?.fitNodesInView(undefined, { animated: true })
+      fitGraph(true)
     }, 220)
 
     return () => {
       window.clearTimeout(timer)
     }
-  }, [nodes, paperIds])
+  }, [fitGraph, isGraphReady, selectionKey])
 
   if (loading) {
     return (
@@ -468,9 +554,10 @@ export default function GraphVisualization({
       style={containerStyle}
       data-testid="graph-panel"
     >
-      <GraphCanvasErrorBoundary key={paperIds.join('|') || 'graph-canvas'}>
+      <GraphCanvasErrorBoundary key={selectionKey || 'graph-canvas'}>
         <ReagraphCanvas
-          ref={graphRef}
+          key={`graph-canvas-${selectionKey || 'empty'}`}
+          ref={setGraphCanvasRef}
           nodes={nodes}
           edges={edges}
           theme={graphTheme}
@@ -508,8 +595,10 @@ export default function GraphVisualization({
         <div className="absolute top-2 right-2 flex gap-1.5 z-20">
           <button
             type="button"
-            onClick={() => graphRef.current?.zoomIn()}
-            className="h-7 w-7 rounded-md bg-white/90 dark:bg-slate-900/90 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-sm hover:bg-white dark:hover:bg-slate-800 transition-colors"
+            onClick={handleZoomIn}
+            disabled={!isGraphReady}
+            aria-disabled={!isGraphReady}
+            className="h-7 w-7 rounded-md bg-white/90 dark:bg-slate-900/90 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-sm enabled:hover:bg-white enabled:dark:hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
             aria-label="Zoom in"
             title="Zoom in"
           >
@@ -517,8 +606,10 @@ export default function GraphVisualization({
           </button>
           <button
             type="button"
-            onClick={() => graphRef.current?.zoomOut()}
-            className="h-7 w-7 rounded-md bg-white/90 dark:bg-slate-900/90 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-sm hover:bg-white dark:hover:bg-slate-800 transition-colors"
+            onClick={handleZoomOut}
+            disabled={!isGraphReady}
+            aria-disabled={!isGraphReady}
+            className="h-7 w-7 rounded-md bg-white/90 dark:bg-slate-900/90 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-sm enabled:hover:bg-white enabled:dark:hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
             aria-label="Zoom out"
             title="Zoom out"
           >
@@ -526,8 +617,10 @@ export default function GraphVisualization({
           </button>
           <button
             type="button"
-            onClick={() => graphRef.current?.fitNodesInView(undefined, { animated: true })}
-            className="h-7 px-2 rounded-md bg-white/90 dark:bg-slate-900/90 border border-slate-300 dark:border-slate-700 text-[11px] font-medium text-slate-700 dark:text-slate-200 hover:bg-white dark:hover:bg-slate-800 transition-colors"
+            onClick={handleFit}
+            disabled={!isGraphReady}
+            aria-disabled={!isGraphReady}
+            className="h-7 px-2 rounded-md bg-white/90 dark:bg-slate-900/90 border border-slate-300 dark:border-slate-700 text-[11px] font-medium text-slate-700 dark:text-slate-200 enabled:hover:bg-white enabled:dark:hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
             aria-label="Fit graph"
             title="Fit graph"
           >
